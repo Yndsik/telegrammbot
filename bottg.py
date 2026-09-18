@@ -10,8 +10,8 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 # --- 0. НАСТРОЙКИ АДМИНИСТРАЦИИ И СЕРВЕРА ---
-# Укажите ваш Telegram ID и ID помощника через запятую:
-ADMIN_IDS = [793313971]  # <--- ВСТАВЬТЕ СВАИ ID СЮДА
+ADMIN_USERNAMES = ["stariy_bog1336"]
+ADMIN_IDS = [123456789]
 
 
 class HealthCheckHandler(BaseHTTPRequestHandler):
@@ -71,7 +71,8 @@ CREATE TABLE IF NOT EXISTS users (
     deposit_rate REAL DEFAULT 0.05,
     last_auto_interest INTEGER DEFAULT 0,
     business TEXT DEFAULT 'Отсутствует',
-    last_biz_collect INTEGER DEFAULT 0
+    last_biz_collect INTEGER DEFAULT 0,
+    exp INTEGER DEFAULT 0
 )
 """)
 conn.commit()
@@ -92,6 +93,7 @@ for col, col_type in [
     ("last_auto_interest", "INTEGER DEFAULT 0"),
     ("business", "TEXT DEFAULT 'Отсутствует'"),
     ("last_biz_collect", "INTEGER DEFAULT 0"),
+    ("exp", "INTEGER DEFAULT 0"),
 ]:
     try:
         cursor.execute(f"ALTER TABLE users ADD COLUMN {col} {col_type}")
@@ -99,16 +101,57 @@ for col, col_type in [
     except sqlite3.OperationalError:
         pass
 
+# --- ИГРОВЫЕ КАТАЛОГИ ---
+JOBS = {
+    "Курьер": {"min_exp": 0, "salary": 300},
+    "Таксист": {"min_exp": 20, "salary": 800},
+    "Программист": {"min_exp": 50, "salary": 2500},
+    "Менеджер": {"min_exp": 100, "salary": 6000},
+    "Банкир": {"min_exp": 200, "salary": 15000},
+    "Депутат": {"min_exp": 500, "salary": 40000},
+}
+
+BUSINESSES = {
+    "⛽️ Автомойка": {"price": 15000, "income": 1200},
+    "🍕 Пиццерия": {"price": 60000, "income": 5000},
+    "⛏ Майнинг-ферма": {"price": 250000, "income": 22000},
+    "🏨 Отель": {"price": 1000000, "income": 90000},
+    "🏢 Бизнес-центр": {"price": 5000000, "income": 450000},
+    "🚀 IT-Корпорация": {"price": 25000000, "income": 2000000},
+}
+
+CARS = {
+    "🚗 ВАЗ 2107": 3000,
+    "🚘 Hyundai Accent": 15000,
+    "🏎 Toyota Camry 70": 45000,
+    "🚙 BMW M5 F90": 120000,
+    "🏎 Mercedes-AMG GT": 300000,
+    "⚡️ Bugatti Chiron": 1500000,
+}
+
+HOUSES = {
+    "📦 Комната в общаге": 10000,
+    "🏠 Однокомнатная квартира": 50000,
+    "🏡 Двухэтажный дом": 200000,
+    "🏙 Пентхаус": 800000,
+    "🏰 Загородный особняк": 3000000,
+    "🏝 Частный остров с виллой": 15000000,
+}
+
 
 def get_user(user_id, first_name="Игрок"):
     cursor.execute(
-        "SELECT user_id, first_name, balance, job, spouse_id, house, car, bank_balance, deposit_created, deposit_term_days, deposit_rate, last_auto_interest, business, last_biz_collect FROM users WHERE user_id = ?",
+        "SELECT user_id, first_name, balance, job, spouse_id, house, car,"
+        " bank_balance, deposit_created, deposit_term_days, deposit_rate,"
+        " last_auto_interest, business, last_biz_collect, exp FROM users WHERE"
+        " user_id = ?",
         (user_id,),
     )
     user = cursor.fetchone()
     if not user:
         cursor.execute(
-            "INSERT INTO users (user_id, first_name, balance) VALUES (?, ?, 1000)",
+            "INSERT INTO users (user_id, first_name, balance) VALUES (?, ?,"
+            " 1000)",
             (user_id, first_name),
         )
         conn.commit()
@@ -126,6 +169,7 @@ def get_user(user_id, first_name="Игрок"):
             0.05,
             0,
             "Отсутствует",
+            0,
             0,
         )
     return user
@@ -148,7 +192,8 @@ def update_balance(user_id, amount):
 def process_auto_interest(user_id):
     curr_time = int(time.time())
     cursor.execute(
-        "SELECT bank_balance, deposit_created, deposit_rate, last_auto_interest FROM users WHERE user_id = ?",
+        "SELECT bank_balance, deposit_created, deposit_rate, last_auto_interest"
+        " FROM users WHERE user_id = ?",
         (user_id,),
     )
     row = cursor.fetchone()
@@ -171,37 +216,11 @@ def process_auto_interest(user_id):
 
             new_last_interest = last_check + (int(elapsed_hours) * 3600)
             cursor.execute(
-                "UPDATE users SET bank_balance = ?, last_auto_interest = ? WHERE user_id = ?",
+                "UPDATE users SET bank_balance = ?, last_auto_interest = ?"
+                " WHERE user_id = ?",
                 (new_bal, new_last_interest, user_id),
             )
             conn.commit()
-
-
-JOBS = {
-    "🏃 Курьер": {"pay": 400, "req": "Доставка еды и посылок"},
-    "🚗 Таксист": {"pay": 800, "req": "Перевозка пассажиров"},
-    "💻 Программист": {"pay": 2000, "req": "Написание кода и ботов"},
-}
-
-HOUSES = {
-    "🏠 Уютная квартира": {"price": 5000, "rent": 500},
-    "🏡 Загородная вилла": {"price": 25000, "rent": 2500},
-    "🏢 Небоскреб": {"price": 100000, "rent": 10000},
-}
-
-CARS = {
-    "🚗 Жигули": {"price": 2000},
-    "🚘 Бизнес-седан": {"price": 12000},
-    "🏎 Спорткар": {"price": 50000},
-}
-
-BUSINESSES = {
-    "⛽️ Автомойка": {"price": 15000, "income": 1200},
-    "🍕 Пиццерия": {"price": 60000, "income": 5000},
-    "⛏ Майнинг-ферма": {"price": 250000, "income": 22000},
-}
-
-games_21 = {}
 
 
 # --- 2. СЕТЕВАЯ ОТПРАВКА ---
@@ -271,14 +290,11 @@ main_inline_menu = {
     "inline_keyboard": [
         [
             {"text": "🎰 Казино и Игры", "callback_data": "menu_casino"},
-            {"text": "💼 Работа и Заработок", "callback_data": "menu_jobs"},
+            {"text": "💼 Работа и Развитие", "callback_data": "menu_jobs"},
         ],
         [
-            {"text": "🏦 Депозиты и Банк", "callback_data": "menu_bank"},
-            {
-                "text": "🏰 Недвижимость и Авто",
-                "callback_data": "menu_property",
-            },
+            {"text": "🏦 Банк и Депозиты", "callback_data": "menu_bank"},
+            {"text": "🏰 Недвижимость и Авто", "callback_data": "menu_property"},
         ],
         [
             {"text": "🏢 Мой Бизнес", "callback_data": "menu_business"},
@@ -288,31 +304,36 @@ main_inline_menu = {
     ]
 }
 
+help_inline_menu = {
+    "inline_keyboard": [
+        [{"text": "🛠 О разработке и ИИ", "callback_data": "help_dev"}],
+        [{"text": "💼 Работа и Заработок", "callback_data": "help_jobs"}],
+        [{"text": "🏦 Банк и Депозиты", "callback_data": "help_bank"}],
+        [{"text": "🏰 Имущество и Бизнес", "callback_data": "help_property"}],
+        [
+            {
+                "text": "⚔️ Дуэли, Ограбления и Переводы",
+                "callback_data": "help_rp",
+            }
+        ],
+        [{"text": "🎰 Казино и Игры", "callback_data": "help_casino"}],
+        [{"text": "⬅️ В главное меню", "callback_data": "menu_main"}],
+    ]
+}
+
 back_to_main_kb = {
     "inline_keyboard": [
         [{"text": "⬅️ Назад в главное меню", "callback_data": "menu_main"}]
     ]
 }
 
-casino_menu_keyboard = {
-    "inline_keyboard": [
-        [{"text": "🎰 Рулетка", "callback_data": "play_roulette_menu"}],
-        [{"text": "🃏 Игра 21 (Блэкджек)", "callback_data": "play_21_prompt"}],
-        [{"text": "🎲 Кости", "callback_data": "play_dice_prompt"}],
-        [{"text": "⬅️ Назад", "callback_data": "menu_main"}],
-    ]
-}
 
-
-def get_card():
-    return random.choice([2, 3, 4, 6, 7, 8, 9, 10, 11])
-
-
-def calculate_score(hand):
-    score = sum(hand)
-    if score > 21 and 11 in hand:
-        score -= 10
-    return score
+def is_admin(user_id: int, username: str) -> bool:
+    if user_id in ADMIN_IDS:
+        return True
+    if username and username.lower() in ADMIN_USERNAMES:
+        return True
+    return False
 
 
 def parse_amount(amount_str: str, user_balance: int) -> int:
@@ -327,10 +348,13 @@ def parse_amount(amount_str: str, user_balance: int) -> int:
 # --- 4. ОСНОВНАЯ ЛОГИКА ---
 def handle_update(update: dict):
     user_id = None
+    username = ""
     if "message" in update:
         user_id = update["message"]["from"]["id"]
+        username = update["message"]["from"].get("username", "")
     elif "callback_query" in update:
         user_id = update["callback_query"]["from"]["id"]
+        username = update["callback_query"]["from"].get("username", "")
 
     if user_id:
         now = time.time()
@@ -349,28 +373,22 @@ def handle_update(update: dict):
 
         get_user(user_id, first_name)
 
-        # --- СЕКРЕТНЫЕ АДМИН-КОМАНДЫ (Создатель и Помощник) ---
-        if text_lower.startswith(
-            ("/givemoney", "/setmoney", "/take", "/setadmin")
-        ):
-            if user_id not in ADMIN_IDS:
+        # Админ-команды
+        if text_lower.startswith(("/givemoney", "/take")):
+            if not is_admin(user_id, username):
                 async_send_message(
                     chat_id,
-                    "⛔️ **Отказано в доступе!** Вы не являетесь создателем или помощником бота.",
+                    "⛔️ **Отказано в доступе!** Вы не являетесь администратором"
+                    " бота.",
                 )
                 return
 
             parts = text.split()
-
-            # Выдача денег: /givemoney 50000 или через reply
             if text_lower.startswith("/givemoney"):
                 if len(parts) >= 2 and parts[1].isdigit():
                     amount = int(parts[1])
-                    # Если команда отправлена в ответ на сообщение другого игрока
                     reply_to = msg.get("reply_to_message")
-                    target = (
-                        reply_to["from"]["id"] if reply_to else user_id
-                    )  # если без reply, выдаем себе
+                    target = reply_to["from"]["id"] if reply_to else user_id
                     target_name = (
                         reply_to["from"].get("first_name", "Игрок")
                         if reply_to
@@ -380,11 +398,11 @@ def handle_update(update: dict):
                     update_balance(target, amount)
                     async_send_message(
                         chat_id,
-                        f"👑 **Админ-действие:** Выдано **+{amount}$** игроку {target_name}!",
+                        f"👑 **Админ-действие:** Выдано **+{amount}$**"
+                        f" ({target_name})!",
                     )
                     return
 
-            # Забрать деньги: /take 50000 (только через reply)
             elif text_lower.startswith("/take"):
                 reply_to = msg.get("reply_to_message")
                 if reply_to and len(parts) >= 2 and parts[1].isdigit():
@@ -393,14 +411,15 @@ def handle_update(update: dict):
                     update_balance(target, -amount)
                     async_send_message(
                         chat_id,
-                        f"👑 **Админ-действие:** Изъято **-{amount}$** у игрока {reply_to['from'].get('first_name')}!",
+                        f"👑 **Админ-действие:** Изъято **-{amount}$** у"
+                        f" {reply_to['from'].get('first_name')}!",
                     )
                     return
 
-        # Обработка ввода сумм
+        # Ввод сумм для банка
         if user_id in user_states and not text.startswith("/"):
             state = user_states[user_id]
-            action = state["action"]
+            action = state.get("action")
 
             cursor.execute(
                 "SELECT balance, bank_balance FROM users WHERE user_id = ?",
@@ -418,7 +437,9 @@ def handle_update(update: dict):
                     return
                 curr_time = int(time.time())
                 cursor.execute(
-                    "UPDATE users SET balance = balance - ?, bank_balance = bank_balance + ?, deposit_created = ?, deposit_rate = 0.05, last_auto_interest = ? WHERE user_id = ?",
+                    "UPDATE users SET balance = balance - ?, bank_balance ="
+                    " bank_balance + ?, deposit_created = ?, deposit_rate ="
+                    " 0.05, last_auto_interest = ? WHERE user_id = ?",
                     (amount, amount, curr_time, curr_time, user_id),
                 )
                 conn.commit()
@@ -435,7 +456,8 @@ def handle_update(update: dict):
                     async_send_message(chat_id, "❌ Недостаточно средств!")
                     return
                 cursor.execute(
-                    "UPDATE users SET balance = balance + ?, bank_balance = bank_balance - ? WHERE user_id = ?",
+                    "UPDATE users SET balance = balance + ?, bank_balance ="
+                    " bank_balance - ? WHERE user_id = ?",
                     (amount, amount, user_id),
                 )
                 conn.commit()
@@ -444,7 +466,7 @@ def handle_update(update: dict):
                 )
                 return
 
-        # Основные кнопки
+        # Текстовые команды и кнопки клавиатуры
         if text.startswith("/start") or text == "📱 Главное меню":
             async_send_message(
                 chat_id,
@@ -457,28 +479,37 @@ def handle_update(update: dict):
 
         elif text in ["👤 Мой профиль", "/profile"]:
             cursor.execute(
-                "SELECT balance, job, spouse_id, house, car, bank_balance, business FROM users WHERE user_id = ?",
+                "SELECT balance, job, spouse_id, house, car, bank_balance,"
+                " business, exp FROM users WHERE user_id = ?",
                 (user_id,),
             )
-            balance, job, spouse_id, house, car, bank_balance, business = (
-                cursor.fetchone()
-            )
+            (
+                balance,
+                job,
+                spouse_id,
+                house,
+                car,
+                bank_balance,
+                business,
+                exp,
+            ) = cursor.fetchone()
             spouse_text = (
                 f"💍 В браке с: {get_user_name(spouse_id)}"
                 if spouse_id
                 else "💍 Статус: Холост"
             )
-
             admin_badge = (
-                "👑 **Статус:** Администратор/Создатель\n"
-                if user_id in ADMIN_IDS
+                "👑 **Статус:** Владелец / Администратор\n"
+                if is_admin(user_id, username)
                 else ""
             )
 
             async_send_message(
                 chat_id,
-                f"👤 **Ваш RP Профиль:**\n{admin_badge}\n"
+                f"👤 **Ваш RP Профиль:**\n{admin_badge}"
+                f"🆔 ID: `{user_id}`\n"
                 f"📝 Имя: {first_name}\n"
+                f"🔥 Опыт развитости: **{exp} EXP**\n"
                 f"💰 Наличные: **{balance}$**\n"
                 f"🏦 В банке: **{bank_balance}$**\n"
                 f"💼 Работа: **{job}**\n"
@@ -491,7 +522,8 @@ def handle_update(update: dict):
         elif text in ["ℹ️ Помощь", "/help"]:
             async_send_message(
                 chat_id,
-                "📖 **Справочный центр**\n\nИспользуйте меню кнопок под сообщениями для управления персонажем и покупками.",
+                "📖 **Справочное бюро**\n\nВыберите нужную категорию из меню ниже:",
+                reply_markup=help_inline_menu,
             )
 
         elif text == "🎁 Ежедневный бонус":
@@ -502,18 +534,21 @@ def handle_update(update: dict):
             last_bonus = cursor.fetchone()[0]
             if curr_time - last_bonus >= 86400:
                 cursor.execute(
-                    "UPDATE users SET balance = balance + 500, last_bonus = ? WHERE user_id = ?",
+                    "UPDATE users SET balance = balance + 500, exp = exp + 5,"
+                    " last_bonus = ? WHERE user_id = ?",
                     (curr_time, user_id),
                 )
                 conn.commit()
                 async_send_message(
-                    chat_id, "🎉 Вы получили ежедневный бонус **+500$**!"
+                    chat_id,
+                    "🎉 Вы получили ежедневный бонус **+500$** и **+5 EXP**!",
                 )
             else:
                 rem = 86400 - (curr_time - last_bonus)
                 async_send_message(
                     chat_id,
-                    f"⏳ Бонус доступен через: {int(rem // 3600)} ч. {int((rem % 3600) // 60)} мин.",
+                    f"⏳ Бонус доступен через: {int(rem // 3600)} ч."
+                    f" {int((rem % 3600) // 60)} мин.",
                 )
 
     elif "callback_query" in update:
@@ -530,112 +565,243 @@ def handle_update(update: dict):
                 reply_markup=main_inline_menu,
             )
 
-        elif data == "menu_casino":
+        elif data == "menu_help":
             async_edit_message_text(
                 chat_id,
                 message_id,
-                "🎰 **Казино и Азартные Игры**\n\nВыберите игру:",
-                reply_markup=casino_menu_keyboard,
+                "📖 **Справочное бюро**\n\nВыберите нужную категорию из меню ниже:",
+                reply_markup=help_inline_menu,
             )
 
-        elif data == "menu_business":
+        # --- РАЗДЕЛ РАБОТ И РАЗВИТИЯ ---
+        elif data == "menu_jobs":
             cursor.execute(
-                "SELECT business, last_biz_collect FROM users WHERE user_id = ?",
+                "SELECT job, last_work, exp FROM users WHERE user_id = ?",
                 (user_id,),
             )
-            business, last_collect = cursor.fetchone()
+            job, last_work, exp = cursor.fetchone()
 
-            biz_buttons = []
-            if business == "Отсутствует":
-                for b_name, b_info in BUSINESSES.items():
-                    biz_buttons.append([{
-                        "text": (
-                            f"Купить {b_name} — {b_info['price']}$"
-                            f" (+{b_info['income']}$/2ч)"
-                        ),
-                        "callback_data": f"buy_biz_{b_name}",
-                    }])
-            else:
-                biz_buttons.append([{
-                    "text": f"💵 Собрать прибыль с ({business})",
-                    "callback_data": "collect_biz",
+            job_buttons = []
+            for j_name, j_info in JOBS.items():
+                job_buttons.append([{
+                    "text": (
+                        f"{'✅ ' if job == j_name else ''}{j_name} —"
+                        f" {j_info['salary']}$ (требуется {j_info['min_exp']}"
+                        " EXP)"
+                    ),
+                    "callback_data": f"set_job_{j_name}",
                 }])
 
-            biz_buttons.append(
+            job_buttons.append([
+                {
+                    "text": "⚒ Отработать смену (+Доход & EXP)",
+                    "callback_data": "do_work",
+                }
+            ])
+            job_buttons.append(
                 [{"text": "⬅️ Назад", "callback_data": "menu_main"}]
             )
 
             async_edit_message_text(
                 chat_id,
                 message_id,
-                f"🏢 **Управление Бизнесом**\n\nВаш текущий бизнес: **{business}**",
-                reply_markup={"inline_keyboard": biz_buttons},
+                f"💼 **Центр Трудоустройства**\n\n"
+                f"Ваш текущий опыт: **{exp} EXP**\n"
+                f"Ваша профессия: **{job}**\n\n"
+                f"Чем выше ваш опыт и должность, тем больше вы зарабатываете!",
+                reply_markup={"inline_keyboard": job_buttons},
             )
 
-        elif data.startswith("buy_biz_"):
-            b_name = data.replace("buy_biz_", "")
-            price = BUSINESSES[b_name]["price"]
-            cursor.execute(
-                "SELECT balance FROM users WHERE user_id = ?", (user_id,)
-            )
-            balance = cursor.fetchone()[0]
-
-            if balance < price:
-                async_answer_callback(
-                    call["id"], f"❌ Не хватает {price - balance}$!"
-                )
-            else:
+        elif data.startswith("set_job_"):
+            j_name = data.replace("set_job_", "")
+            if j_name in JOBS:
                 cursor.execute(
-                    "UPDATE users SET balance = balance - ?, business = ? WHERE user_id = ?",
-                    (price, b_name, user_id),
+                    "SELECT exp FROM users WHERE user_id = ?", (user_id,)
                 )
-                conn.commit()
-                async_answer_callback(call["id"], f"🎉 Куплено: {b_name}!")
-                async_edit_message_text(
-                    chat_id,
-                    message_id,
-                    f"🎉 Вы успешно купили **{b_name}**!",
-                    reply_markup=back_to_main_kb,
-                )
+                user_exp = cursor.fetchone()[0]
 
-        elif data == "collect_biz":
+                if user_exp < JOBS[j_name]["min_exp"]:
+                    async_answer_callback(
+                        call["id"],
+                        f"❌ Не хватает опыта! Требуется"
+                        f" {JOBS[j_name]['min_exp']} EXP.",
+                    )
+                else:
+                    cursor.execute(
+                        "UPDATE users SET job = ? WHERE user_id = ?",
+                        (j_name, user_id),
+                    )
+                    conn.commit()
+                    async_answer_callback(
+                        call["id"], f"🎉 Вы устроились: {j_name}!"
+                    )
+                    async_edit_message_text(
+                        chat_id,
+                        message_id,
+                        f"🎉 Вы успешно устроились на работу: **{j_name}**!",
+                        reply_markup=back_to_main_kb,
+                    )
+
+        elif data == "do_work":
             curr_time = int(time.time())
             cursor.execute(
-                "SELECT business, last_biz_collect FROM users WHERE user_id = ?",
+                "SELECT job, last_work, exp FROM users WHERE user_id = ?",
                 (user_id,),
             )
-            business, last_collect = cursor.fetchone()
+            job, last_work, exp = cursor.fetchone()
 
-            if business == "Отсутствует":
-                async_answer_callback(call["id"], "❌ У вас нет бизнеса!")
-            elif curr_time - last_collect >= 7200:  # раз в 2 часа
-                income = BUSINESSES[business]["income"]
+            if job == "Безработный":
+                async_answer_callback(
+                    call["id"], "❌ Выберите профессию в списке!"
+                )
+            elif curr_time - last_work >= 600:  # Перезарядка 10 минут
+                salary = JOBS[job]["salary"] + (exp * 2)  # Бонус за EXP
                 cursor.execute(
-                    "UPDATE users SET balance = balance + ?, last_biz_collect = ? WHERE user_id = ?",
-                    (income, curr_time, user_id),
+                    "UPDATE users SET balance = balance + ?, exp = exp + 10,"
+                    " last_work = ? WHERE user_id = ?",
+                    (salary, curr_time, user_id),
                 )
                 conn.commit()
-                async_answer_callback(call["id"], f"💵 Собрано: +{income}$!")
-            else:
-                rem = 7200 - (curr_time - last_collect)
                 async_answer_callback(
-                    call["id"],
-                    f"⏳ Касса наполняется! До сбора: {int((rem % 3600) // 60)} мин.",
+                    call["id"], f"💰 Заработано: +{salary}$ и +10 EXP!"
+                )
+            else:
+                rem = 600 - (curr_time - last_work)
+                async_answer_callback(
+                    call["id"], f"⏳ Отдых еще: {int(rem // 60)} мин. {rem % 60} сек."
                 )
 
-        # Прочие стандартные переходы меню...
+        # --- РАЗДЕЛ НЕДВИЖИМОСТИ И АВТО ---
+        elif data == "menu_property":
+            cursor.execute(
+                "SELECT house, car FROM users WHERE user_id = ?", (user_id,)
+            )
+            house, car = cursor.fetchone()
+
+            prop_buttons = [
+                [{"text": "🚗 Купить Автомобиль", "callback_data": "buy_car_menu"}],
+                [{"text": "🏠 Купить Недвижимость", "callback_data": "buy_house_menu"}],
+                [{"text": "⬅️ Назад", "callback_data": "menu_main"}],
+            ]
+
+            async_edit_message_text(
+                chat_id,
+                message_id,
+                f"🏰 **Рынок Имущества**\n\n"
+                f"🏠 Ваш дом: **{house}**\n"
+                f"🚗 Ваше авто: **{car}**\n\n"
+                f"Выберите категорию для покупки:",
+                reply_markup={"inline_keyboard": prop_buttons},
+            )
+
+        elif data == "buy_car_menu":
+            car_buttons = []
+            for c_name, c_price in CARS.items():
+                car_buttons.append([{
+                    "text": f"{c_name} — {c_price}$",
+                    "callback_data": f"buycar_{c_name}",
+                }])
+            car_buttons.append(
+                [{"text": "⬅️ Назад", "callback_data": "menu_property"}]
+            )
+
+            async_edit_message_text(
+                chat_id,
+                message_id,
+                "🚗 **Автосалон**\nВыберите машину для покупки:",
+                reply_markup={"inline_keyboard": car_buttons},
+            )
+
+        elif data.startswith("buycar_"):
+            c_name = data.replace("buycar_", "")
+            if c_name in CARS:
+                price = CARS[c_name]
+                cursor.execute(
+                    "SELECT balance FROM users WHERE user_id = ?", (user_id,)
+                )
+                balance = cursor.fetchone()[0]
+
+                if balance < price:
+                    async_answer_callback(
+                        call["id"], f"❌ Не хватает {price - balance}$!"
+                    )
+                else:
+                    cursor.execute(
+                        "UPDATE users SET balance = balance - ?, car = ? WHERE"
+                        " user_id = ?",
+                        (price, c_name, user_id),
+                    )
+                    conn.commit()
+                    async_answer_callback(call["id"], f"🏎 Куплено: {c_name}!")
+                    async_edit_message_text(
+                        chat_id,
+                        message_id,
+                        f"🏎 Поздравляем с покупкой авто **{c_name}**!",
+                        reply_markup=back_to_main_kb,
+                    )
+
+        elif data == "buy_house_menu":
+            house_buttons = []
+            for h_name, h_price in HOUSES.items():
+                house_buttons.append([{
+                    "text": f"{h_name} — {h_price}$",
+                    "callback_data": f"buyhouse_{h_name}",
+                }])
+            house_buttons.append(
+                [{"text": "⬅️ Назад", "callback_data": "menu_property"}]
+            )
+
+            async_edit_message_text(
+                chat_id,
+                message_id,
+                "🏠 **Агентство Недвижимости**\nВыберите жилье для покупки:",
+                reply_markup={"inline_keyboard": house_buttons},
+            )
+
+        elif data.startswith("buyhouse_"):
+            h_name = data.replace("buyhouse_", "")
+            if h_name in HOUSES:
+                price = HOUSES[h_name]
+                cursor.execute(
+                    "SELECT balance FROM users WHERE user_id = ?", (user_id,)
+                )
+                balance = cursor.fetchone()[0]
+
+                if balance < price:
+                    async_answer_callback(
+                        call["id"], f"❌ Не хватает {price - balance}$!"
+                    )
+                else:
+                    cursor.execute(
+                        "UPDATE users SET balance = balance - ?, house = ?"
+                        " WHERE user_id = ?",
+                        (price, h_name, user_id),
+                    )
+                    conn.commit()
+                    async_answer_callback(call["id"], f"🏠 Куплено: {h_name}!")
+                    async_edit_message_text(
+                        chat_id,
+                        message_id,
+                        f"🏠 Поздравляем с покупкой жилья **{h_name}**!",
+                        reply_markup=back_to_main_kb,
+                    )
+
+        # --- ОБРАБОТКА БАНКА ---
         elif data == "menu_bank":
             cursor.execute(
                 "SELECT bank_balance, deposit_rate, balance FROM users WHERE"
                 " user_id = ?",
                 (user_id,),
             )
-            bank_balance, dep_rate, my_balance = cursor.fetchone()
+            row = cursor.fetchone()
+            bank_balance = row[0] if row else 0
+            my_balance = row[2] if row else 0
+
             bank_inline_kb = {
                 "inline_keyboard": [
                     [
                         {
-                            "text": "📥 Внести депозит",
+                            "text": "📥 Внести на депозит",
                             "callback_data": "bank_dep_prompt",
                         },
                         {
@@ -649,9 +815,228 @@ def handle_update(update: dict):
             async_edit_message_text(
                 chat_id,
                 message_id,
-                f"🏦 **Центральный Банк**\n\n💵 Наличные: **{my_balance}$**\n🏦 На депозите: **{bank_balance}$**",
+                f"🏦 **Центральный Банк**\n\n"
+                f"💵 Наличные: **{my_balance}$**\n"
+                f"🏦 На депозите: **{bank_balance}$**\n"
+                f"📈 Начисление: **5% в час** (автоматически)",
                 reply_markup=bank_inline_kb,
             )
+
+        elif data == "bank_dep_prompt":
+            user_states[user_id] = {"action": "bank_deposit_amount"}
+            async_send_message(
+                chat_id,
+                "📥 **Пополнение депозита**\nВведите сумму, которую хотите"
+                " положить в банк (или напишите `все`):",
+            )
+
+        elif data == "bank_wd_prompt":
+            user_states[user_id] = {"action": "bank_withdraw_amount"}
+            async_send_message(
+                chat_id,
+                "📤 **Снятие с депозита**\nВведите сумму, которую хотите снять"
+                " из банка (или напишите `все`):",
+            )
+
+        # --- ОБРАБОТКА БИЗНЕСА ---
+        elif data == "menu_business":
+            cursor.execute(
+                "SELECT business, last_biz_collect FROM users WHERE user_id ="
+                " ?",
+                (user_id,),
+            )
+            row = cursor.fetchone()
+            business = row[0] if row else "Отсутствует"
+
+            biz_buttons = []
+            if business == "Отсутствует":
+                for b_name, b_info in BUSINESSES.items():
+                    biz_buttons.append([{
+                        "text": (
+                            f"Купить {b_name} — {b_info['price']}$"
+                            f" (+{b_info['income']}$/2ч)"
+                        ),
+                        "callback_data": f"buy_biz_{b_name}",
+                    }])
+            else:
+                biz_buttons.append([{
+                    "text": f"💵 Собрать прибыль ({business})",
+                    "callback_data": "collect_biz",
+                }])
+
+            biz_buttons.append(
+                [{"text": "⬅️ Назад", "callback_data": "menu_main"}]
+            )
+
+            async_edit_message_text(
+                chat_id,
+                message_id,
+                f"🏢 **Управление Бизнесом**\n\nВаш текущий бизнес:"
+                f" **{business}**",
+                reply_markup={"inline_keyboard": biz_buttons},
+            )
+
+        elif data.startswith("buy_biz_"):
+            b_name = data.replace("buy_biz_", "")
+            if b_name in BUSINESSES:
+                price = BUSINESSES[b_name]["price"]
+                cursor.execute(
+                    "SELECT balance FROM users WHERE user_id = ?", (user_id,)
+                )
+                balance = cursor.fetchone()[0]
+
+                if balance < price:
+                    async_answer_callback(
+                        call["id"], f"❌ Не хватает {price - balance}$!"
+                    )
+                else:
+                    cursor.execute(
+                        "UPDATE users SET balance = balance - ?, business = ?"
+                        " WHERE user_id = ?",
+                        (price, b_name, user_id),
+                    )
+                    conn.commit()
+                    async_answer_callback(call["id"], f"🎉 Куплено: {b_name}!")
+                    async_edit_message_text(
+                        chat_id,
+                        message_id,
+                        f"🎉 Вы успешно купили **{b_name}**!",
+                        reply_markup=back_to_main_kb,
+                    )
+
+        elif data == "collect_biz":
+            curr_time = int(time.time())
+            cursor.execute(
+                "SELECT business, last_biz_collect, exp FROM users WHERE user_id"
+                " = ?",
+                (user_id,),
+            )
+            row = cursor.fetchone()
+            business = row[0] if row else "Отсутствует"
+            last_collect = row[1] if row else 0
+            exp = row[2] if row else 0
+
+            if business == "Отсутствует":
+                async_answer_callback(call["id"], "❌ У вас нет бизнеса!")
+            elif curr_time - last_collect >= 7200:
+                income = BUSINESSES[business]["income"] + (
+                    exp * 10
+                )  # Бонус от развития
+                cursor.execute(
+                    "UPDATE users SET balance = balance + ?,"
+                    " last_biz_collect = ? WHERE user_id = ?",
+                    (income, curr_time, user_id),
+                )
+                conn.commit()
+                async_answer_callback(call["id"], f"💵 Собрано: +{income}$!")
+            else:
+                rem = 7200 - (curr_time - last_collect)
+                async_answer_callback(
+                    call["id"],
+                    f"⏳ До сбора кассы: {int((rem % 3600) // 60)} мин.",
+                )
+
+        # --- КАТЕГОРИИ ПОМОЩИ ---
+        elif data == "help_dev":
+            async_edit_message_text(
+                chat_id,
+                message_id,
+                "🛠 **О разработке и ИИ**\n\nБот создан с помощью"
+                " искусственного интеллекта.\nПо всем вопросам:"
+                " @Stariy_bog1336",
+                reply_markup={
+                    "inline_keyboard": [
+                        [{"text": "⬅️ Назад", "callback_data": "menu_help"}]
+                    ]
+                },
+            )
+
+        elif data == "help_jobs":
+            async_edit_message_text(
+                chat_id,
+                message_id,
+                "💼 **Работа и Заработок**\n\n• Устраивайтесь на работу через"
+                " меню.\n• С каждым рабочим днём растёт ваш EXP опыт!",
+                reply_markup={
+                    "inline_keyboard": [
+                        [{"text": "⬅️ Назад", "callback_data": "menu_help"}]
+                    ]
+                },
+            )
+
+        elif data == "help_bank":
+            async_edit_message_text(
+                chat_id,
+                message_id,
+                "🏦 **Банк и Депозиты**\n\n• Кладите деньги в банк под 5% в"
+                " час.\n• Проценты капают автоматически!",
+                reply_markup={
+                    "inline_keyboard": [
+                        [{"text": "⬅️ Назад", "callback_data": "menu_help"}]
+                    ]
+                },
+            )
+
+        elif data == "help_property":
+            async_edit_message_text(
+                chat_id,
+                message_id,
+                "🏰 **Имущество и Бизнес**\n\n• Покупайте машины, дома и"
+                " бизнесы для пассивного дохода.",
+                reply_markup={
+                    "inline_keyboard": [
+                        [{"text": "⬅️ Назад", "callback_data": "menu_help"}]
+                    ]
+                },
+            )
+
+        elif data == "help_rp":
+            async_edit_message_text(
+                chat_id,
+                message_id,
+                "⚔️ **Дуэли и Переводы**\n\n• Грабите игроков и переводите"
+                " валюту друзьям.",
+                reply_markup={
+                    "inline_keyboard": [
+                        [{"text": "⬅️ Назад", "callback_data": "menu_help"}]
+                    ]
+                },
+            )
+
+        elif data == "help_casino":
+            async_edit_message_text(
+                chat_id,
+                message_id,
+                "🎰 **Казино и Игры**\n\n• Играйте в Рулетку, Блэкджек (21) и"
+                " Кости.",
+                reply_markup={
+                    "inline_keyboard": [
+                        [{"text": "⬅️ Назад", "callback_data": "menu_help"}]
+                    ]
+                },
+            )
+
+        elif data == "menu_ad":
+            cursor.execute(
+                "SELECT last_ad FROM users WHERE user_id = ?", (user_id,)
+            )
+            last_ad = cursor.fetchone()[0]
+            curr_time = int(time.time())
+            if curr_time - last_ad >= 1800:  # Реклама каждые 30 мин
+                cursor.execute(
+                    "UPDATE users SET balance = balance + 300, last_ad = ?"
+                    " WHERE user_id = ?",
+                    (curr_time, user_id),
+                )
+                conn.commit()
+                async_answer_callback(
+                    call["id"], "📺 Начислено +300$ за просмотр рекламы!"
+                )
+            else:
+                rem = 1800 - (curr_time - last_ad)
+                async_answer_callback(
+                    call["id"], f"⏳ Доступно через: {int(rem // 60)} мин."
+                )
 
         elif data == "menu_top":
             cursor.execute(
