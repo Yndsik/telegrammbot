@@ -1,13 +1,13 @@
 import json
 import os
 import random
-import sqlite3
 import ssl
 import threading
 import time
 import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
+import psycopg2
 
 # --- 0. НАСТРОЙКИ АДМИНИСТРАЦИИ И СЕРВЕРА ---
 ADMIN_USERNAMES = ["stariy_bog1336"]
@@ -33,7 +33,7 @@ def run_health_check_server():
 
 threading.Thread(target=run_health_check_server, daemon=True).start()
 
-# --- 1. НАСТРОЙКИ И БАЗА ДАННЫХ ---
+# --- 1. НАСТРОЙКИ И ПОДКЛЮЧЕНИЕ К ОБЛАЧНОЙ БД (NEON) ---
 TOKEN = "8932170200:AAHpxbAuLChcEkQqaIofxOBUfyN8eVyEvAM"
 API_URL = f"https://api.telegram.org/bot{TOKEN}/"
 
@@ -45,61 +45,68 @@ user_cooldowns = {}
 COOLDOWN_TIME = 0.2
 user_states = {}
 
-conn = sqlite3.connect("casino.db", check_same_thread=False)
+# Ваша строка подключения к Neon PostgreSQL
+DB_URL = "postgresql://neondb_owner:npg_MZklTNW64pxJ@ep-curly-salad-b4qr5crk-pooler.c-6.us-east-2.aws.neon.tech/neondb?sslmode=require"
+
+
+def get_db_connection():
+    return psycopg2.connect(DB_URL)
+
+
+conn = get_db_connection()
 cursor = conn.cursor()
 
-cursor.execute("PRAGMA journal_mode = WAL;")
-cursor.execute("PRAGMA synchronous = NORMAL;")
-
+# Создание таблицы в PostgreSQL
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS users (
-    user_id INTEGER PRIMARY KEY,
+    user_id BIGINT PRIMARY KEY,
     first_name TEXT,
-    balance INTEGER DEFAULT 1000,
-    last_bonus INTEGER DEFAULT 0,
-    last_ad INTEGER DEFAULT 0,
+    balance BIGINT DEFAULT 1000,
+    last_bonus BIGINT DEFAULT 0,
+    last_ad BIGINT DEFAULT 0,
     job TEXT DEFAULT 'Безработный',
-    last_work INTEGER DEFAULT 0,
-    spouse_id INTEGER DEFAULT 0,
-    last_rob INTEGER DEFAULT 0,
+    last_work BIGINT DEFAULT 0,
+    spouse_id BIGINT DEFAULT 0,
+    last_rob BIGINT DEFAULT 0,
     house TEXT DEFAULT 'Отсутствует',
     car TEXT DEFAULT 'Отсутствует',
-    last_rent INTEGER DEFAULT 0,
-    bank_balance INTEGER DEFAULT 0,
-    deposit_created INTEGER DEFAULT 0,
-    deposit_term_days INTEGER DEFAULT 0,
+    last_rent BIGINT DEFAULT 0,
+    bank_balance BIGINT DEFAULT 0,
+    deposit_created BIGINT DEFAULT 0,
+    deposit_term_days BIGINT DEFAULT 0,
     deposit_rate REAL DEFAULT 0.05,
-    last_auto_interest INTEGER DEFAULT 0,
+    last_auto_interest BIGINT DEFAULT 0,
     business TEXT DEFAULT 'Отсутствует',
-    last_biz_collect INTEGER DEFAULT 0,
-    exp INTEGER DEFAULT 0
+    last_biz_collect BIGINT DEFAULT 0,
+    exp BIGINT DEFAULT 0
 )
 """)
 conn.commit()
 
+# Проверка и добавление колонок для автомиграции
 for col, col_type in [
-    ("last_ad", "INTEGER DEFAULT 0"),
+    ("last_ad", "BIGINT DEFAULT 0"),
     ("job", "TEXT DEFAULT 'Безработный'"),
-    ("last_work", "INTEGER DEFAULT 0"),
-    ("spouse_id", "INTEGER DEFAULT 0"),
-    ("last_rob", "INTEGER DEFAULT 0"),
+    ("last_work", "BIGINT DEFAULT 0"),
+    ("spouse_id", "BIGINT DEFAULT 0"),
+    ("last_rob", "BIGINT DEFAULT 0"),
     ("house", "TEXT DEFAULT 'Отсутствует'"),
     ("car", "TEXT DEFAULT 'Отсутствует'"),
-    ("last_rent", "INTEGER DEFAULT 0"),
-    ("bank_balance", "INTEGER DEFAULT 0"),
-    ("deposit_created", "INTEGER DEFAULT 0"),
-    ("deposit_term_days", "INTEGER DEFAULT 0"),
+    ("last_rent", "BIGINT DEFAULT 0"),
+    ("bank_balance", "BIGINT DEFAULT 0"),
+    ("deposit_created", "BIGINT DEFAULT 0"),
+    ("deposit_term_days", "BIGINT DEFAULT 0"),
     ("deposit_rate", "REAL DEFAULT 0.05"),
-    ("last_auto_interest", "INTEGER DEFAULT 0"),
+    ("last_auto_interest", "BIGINT DEFAULT 0"),
     ("business", "TEXT DEFAULT 'Отсутствует'"),
-    ("last_biz_collect", "INTEGER DEFAULT 0"),
-    ("exp", "INTEGER DEFAULT 0"),
+    ("last_biz_collect", "BIGINT DEFAULT 0"),
+    ("exp", "BIGINT DEFAULT 0"),
 ]:
     try:
         cursor.execute(f"ALTER TABLE users ADD COLUMN {col} {col_type}")
         conn.commit()
-    except sqlite3.OperationalError:
-        pass
+    except Exception:
+        conn.rollback()
 
 # --- ИГРОВЫЕ КАТАЛОГИ ---
 JOBS = {
@@ -144,13 +151,13 @@ def get_user(user_id, first_name="Игрок"):
         "SELECT user_id, first_name, balance, job, spouse_id, house, car,"
         " bank_balance, deposit_created, deposit_term_days, deposit_rate,"
         " last_auto_interest, business, last_biz_collect, exp FROM users WHERE"
-        " user_id = ?",
+        " user_id = %s",
         (user_id,),
     )
     user = cursor.fetchone()
     if not user:
         cursor.execute(
-            "INSERT INTO users (user_id, first_name, balance) VALUES (?, ?,"
+            "INSERT INTO users (user_id, first_name, balance) VALUES (%s, %s,"
             " 1000)",
             (user_id, first_name),
         )
@@ -176,14 +183,16 @@ def get_user(user_id, first_name="Игрок"):
 
 
 def get_user_name(user_id):
-    cursor.execute("SELECT first_name FROM users WHERE user_id = ?", (user_id,))
+    cursor.execute(
+        "SELECT first_name FROM users WHERE user_id = %s", (user_id,)
+    )
     res = cursor.fetchone()
     return res[0] if res else "Неизвестный"
 
 
 def update_balance(user_id, amount):
     cursor.execute(
-        "UPDATE users SET balance = balance + ? WHERE user_id = ?",
+        "UPDATE users SET balance = balance + %s WHERE user_id = %s",
         (amount, user_id),
     )
     conn.commit()
@@ -193,7 +202,7 @@ def process_auto_interest(user_id):
     curr_time = int(time.time())
     cursor.execute(
         "SELECT bank_balance, deposit_created, deposit_rate, last_auto_interest"
-        " FROM users WHERE user_id = ?",
+        " FROM users WHERE user_id = %s",
         (user_id,),
     )
     row = cursor.fetchone()
@@ -216,8 +225,8 @@ def process_auto_interest(user_id):
 
             new_last_interest = last_check + (int(elapsed_hours) * 3600)
             cursor.execute(
-                "UPDATE users SET bank_balance = ?, last_auto_interest = ?"
-                " WHERE user_id = ?",
+                "UPDATE users SET bank_balance = %s, last_auto_interest = %s"
+                " WHERE user_id = %s",
                 (new_bal, new_last_interest, user_id),
             )
             conn.commit()
@@ -422,7 +431,7 @@ def handle_update(update: dict):
             action = state.get("action")
 
             cursor.execute(
-                "SELECT balance, bank_balance FROM users WHERE user_id = ?",
+                "SELECT balance, bank_balance FROM users WHERE user_id = %s",
                 (user_id,),
             )
             my_balance, bank_balance = cursor.fetchone()
@@ -437,9 +446,9 @@ def handle_update(update: dict):
                     return
                 curr_time = int(time.time())
                 cursor.execute(
-                    "UPDATE users SET balance = balance - ?, bank_balance ="
-                    " bank_balance + ?, deposit_created = ?, deposit_rate ="
-                    " 0.05, last_auto_interest = ? WHERE user_id = ?",
+                    "UPDATE users SET balance = balance - %s, bank_balance ="
+                    " bank_balance + %s, deposit_created = %s, deposit_rate ="
+                    " 0.05, last_auto_interest = %s WHERE user_id = %s",
                     (amount, amount, curr_time, curr_time, user_id),
                 )
                 conn.commit()
@@ -456,8 +465,8 @@ def handle_update(update: dict):
                     async_send_message(chat_id, "❌ Недостаточно средств!")
                     return
                 cursor.execute(
-                    "UPDATE users SET balance = balance + ?, bank_balance ="
-                    " bank_balance - ? WHERE user_id = ?",
+                    "UPDATE users SET balance = balance + %s, bank_balance ="
+                    " bank_balance - %s WHERE user_id = %s",
                     (amount, amount, user_id),
                 )
                 conn.commit()
@@ -466,7 +475,7 @@ def handle_update(update: dict):
                 )
                 return
 
-        # Текстовые команды и кнопки клавиатуры
+        # Текстовые команды
         if text.startswith("/start") or text == "📱 Главное меню":
             async_send_message(
                 chat_id,
@@ -480,7 +489,7 @@ def handle_update(update: dict):
         elif text in ["👤 Мой профиль", "/profile"]:
             cursor.execute(
                 "SELECT balance, job, spouse_id, house, car, bank_balance,"
-                " business, exp FROM users WHERE user_id = ?",
+                " business, exp FROM users WHERE user_id = %s",
                 (user_id,),
             )
             (
@@ -529,13 +538,13 @@ def handle_update(update: dict):
         elif text == "🎁 Ежедневный бонус":
             curr_time = int(time.time())
             cursor.execute(
-                "SELECT last_bonus FROM users WHERE user_id = ?", (user_id,)
+                "SELECT last_bonus FROM users WHERE user_id = %s", (user_id,)
             )
             last_bonus = cursor.fetchone()[0]
             if curr_time - last_bonus >= 86400:
                 cursor.execute(
                     "UPDATE users SET balance = balance + 500, exp = exp + 5,"
-                    " last_bonus = ? WHERE user_id = ?",
+                    " last_bonus = %s WHERE user_id = %s",
                     (curr_time, user_id),
                 )
                 conn.commit()
@@ -573,10 +582,10 @@ def handle_update(update: dict):
                 reply_markup=help_inline_menu,
             )
 
-        # --- РАЗДЕЛ РАБОТ И РАЗВИТИЯ ---
+        # РАБОТА И РАЗВИТИЕ
         elif data == "menu_jobs":
             cursor.execute(
-                "SELECT job, last_work, exp FROM users WHERE user_id = ?",
+                "SELECT job, last_work, exp FROM users WHERE user_id = %s",
                 (user_id,),
             )
             job, last_work, exp = cursor.fetchone()
@@ -616,7 +625,7 @@ def handle_update(update: dict):
             j_name = data.replace("set_job_", "")
             if j_name in JOBS:
                 cursor.execute(
-                    "SELECT exp FROM users WHERE user_id = ?", (user_id,)
+                    "SELECT exp FROM users WHERE user_id = %s", (user_id,)
                 )
                 user_exp = cursor.fetchone()[0]
 
@@ -628,7 +637,7 @@ def handle_update(update: dict):
                     )
                 else:
                     cursor.execute(
-                        "UPDATE users SET job = ? WHERE user_id = ?",
+                        "UPDATE users SET job = %s WHERE user_id = %s",
                         (j_name, user_id),
                     )
                     conn.commit()
@@ -645,7 +654,7 @@ def handle_update(update: dict):
         elif data == "do_work":
             curr_time = int(time.time())
             cursor.execute(
-                "SELECT job, last_work, exp FROM users WHERE user_id = ?",
+                "SELECT job, last_work, exp FROM users WHERE user_id = %s",
                 (user_id,),
             )
             job, last_work, exp = cursor.fetchone()
@@ -654,11 +663,11 @@ def handle_update(update: dict):
                 async_answer_callback(
                     call["id"], "❌ Выберите профессию в списке!"
                 )
-            elif curr_time - last_work >= 600:  # Перезарядка 10 минут
-                salary = JOBS[job]["salary"] + (exp * 2)  # Бонус за EXP
+            elif curr_time - last_work >= 600:
+                salary = JOBS[job]["salary"] + (exp * 2)
                 cursor.execute(
-                    "UPDATE users SET balance = balance + ?, exp = exp + 10,"
-                    " last_work = ? WHERE user_id = ?",
+                    "UPDATE users SET balance = balance + %s, exp = exp + 10,"
+                    " last_work = %s WHERE user_id = %s",
                     (salary, curr_time, user_id),
                 )
                 conn.commit()
@@ -671,10 +680,10 @@ def handle_update(update: dict):
                     call["id"], f"⏳ Отдых еще: {int(rem // 60)} мин. {rem % 60} сек."
                 )
 
-        # --- РАЗДЕЛ НЕДВИЖИМОСТИ И АВТО ---
+        # НЕДВИЖИМОСТЬ И АВТО
         elif data == "menu_property":
             cursor.execute(
-                "SELECT house, car FROM users WHERE user_id = ?", (user_id,)
+                "SELECT house, car FROM users WHERE user_id = %s", (user_id,)
             )
             house, car = cursor.fetchone()
 
@@ -717,7 +726,7 @@ def handle_update(update: dict):
             if c_name in CARS:
                 price = CARS[c_name]
                 cursor.execute(
-                    "SELECT balance FROM users WHERE user_id = ?", (user_id,)
+                    "SELECT balance FROM users WHERE user_id = %s", (user_id,)
                 )
                 balance = cursor.fetchone()[0]
 
@@ -727,8 +736,8 @@ def handle_update(update: dict):
                     )
                 else:
                     cursor.execute(
-                        "UPDATE users SET balance = balance - ?, car = ? WHERE"
-                        " user_id = ?",
+                        "UPDATE users SET balance = balance - %s, car = %s"
+                        " WHERE user_id = %s",
                         (price, c_name, user_id),
                     )
                     conn.commit()
@@ -763,7 +772,7 @@ def handle_update(update: dict):
             if h_name in HOUSES:
                 price = HOUSES[h_name]
                 cursor.execute(
-                    "SELECT balance FROM users WHERE user_id = ?", (user_id,)
+                    "SELECT balance FROM users WHERE user_id = %s", (user_id,)
                 )
                 balance = cursor.fetchone()[0]
 
@@ -773,8 +782,8 @@ def handle_update(update: dict):
                     )
                 else:
                     cursor.execute(
-                        "UPDATE users SET balance = balance - ?, house = ?"
-                        " WHERE user_id = ?",
+                        "UPDATE users SET balance = balance - %s, house = %s"
+                        " WHERE user_id = %s",
                         (price, h_name, user_id),
                     )
                     conn.commit()
@@ -786,11 +795,11 @@ def handle_update(update: dict):
                         reply_markup=back_to_main_kb,
                     )
 
-        # --- ОБРАБОТКА БАНКА ---
+        # БАНК
         elif data == "menu_bank":
             cursor.execute(
                 "SELECT bank_balance, deposit_rate, balance FROM users WHERE"
-                " user_id = ?",
+                " user_id = %s",
                 (user_id,),
             )
             row = cursor.fetchone()
@@ -838,11 +847,11 @@ def handle_update(update: dict):
                 " из банка (или напишите `все`):",
             )
 
-        # --- ОБРАБОТКА БИЗНЕСА ---
+        # БИЗНЕС
         elif data == "menu_business":
             cursor.execute(
                 "SELECT business, last_biz_collect FROM users WHERE user_id ="
-                " ?",
+                " %s",
                 (user_id,),
             )
             row = cursor.fetchone()
@@ -881,7 +890,7 @@ def handle_update(update: dict):
             if b_name in BUSINESSES:
                 price = BUSINESSES[b_name]["price"]
                 cursor.execute(
-                    "SELECT balance FROM users WHERE user_id = ?", (user_id,)
+                    "SELECT balance FROM users WHERE user_id = %s", (user_id,)
                 )
                 balance = cursor.fetchone()[0]
 
@@ -891,8 +900,8 @@ def handle_update(update: dict):
                     )
                 else:
                     cursor.execute(
-                        "UPDATE users SET balance = balance - ?, business = ?"
-                        " WHERE user_id = ?",
+                        "UPDATE users SET balance = balance - %s, business = %s"
+                        " WHERE user_id = %s",
                         (price, b_name, user_id),
                     )
                     conn.commit()
@@ -908,7 +917,7 @@ def handle_update(update: dict):
             curr_time = int(time.time())
             cursor.execute(
                 "SELECT business, last_biz_collect, exp FROM users WHERE user_id"
-                " = ?",
+                " = %s",
                 (user_id,),
             )
             row = cursor.fetchone()
@@ -919,12 +928,10 @@ def handle_update(update: dict):
             if business == "Отсутствует":
                 async_answer_callback(call["id"], "❌ У вас нет бизнеса!")
             elif curr_time - last_collect >= 7200:
-                income = BUSINESSES[business]["income"] + (
-                    exp * 10
-                )  # Бонус от развития
+                income = BUSINESSES[business]["income"] + (exp * 10)
                 cursor.execute(
-                    "UPDATE users SET balance = balance + ?,"
-                    " last_biz_collect = ? WHERE user_id = ?",
+                    "UPDATE users SET balance = balance + %s,"
+                    " last_biz_collect = %s WHERE user_id = %s",
                     (income, curr_time, user_id),
                 )
                 conn.commit()
@@ -934,108 +941,6 @@ def handle_update(update: dict):
                 async_answer_callback(
                     call["id"],
                     f"⏳ До сбора кассы: {int((rem % 3600) // 60)} мин.",
-                )
-
-        # --- КАТЕГОРИИ ПОМОЩИ ---
-        elif data == "help_dev":
-            async_edit_message_text(
-                chat_id,
-                message_id,
-                "🛠 **О разработке и ИИ**\n\nБот создан с помощью"
-                " искусственного интеллекта.\nПо всем вопросам:"
-                " @Stariy_bog1336",
-                reply_markup={
-                    "inline_keyboard": [
-                        [{"text": "⬅️ Назад", "callback_data": "menu_help"}]
-                    ]
-                },
-            )
-
-        elif data == "help_jobs":
-            async_edit_message_text(
-                chat_id,
-                message_id,
-                "💼 **Работа и Заработок**\n\n• Устраивайтесь на работу через"
-                " меню.\n• С каждым рабочим днём растёт ваш EXP опыт!",
-                reply_markup={
-                    "inline_keyboard": [
-                        [{"text": "⬅️ Назад", "callback_data": "menu_help"}]
-                    ]
-                },
-            )
-
-        elif data == "help_bank":
-            async_edit_message_text(
-                chat_id,
-                message_id,
-                "🏦 **Банк и Депозиты**\n\n• Кладите деньги в банк под 5% в"
-                " час.\n• Проценты капают автоматически!",
-                reply_markup={
-                    "inline_keyboard": [
-                        [{"text": "⬅️ Назад", "callback_data": "menu_help"}]
-                    ]
-                },
-            )
-
-        elif data == "help_property":
-            async_edit_message_text(
-                chat_id,
-                message_id,
-                "🏰 **Имущество и Бизнес**\n\n• Покупайте машины, дома и"
-                " бизнесы для пассивного дохода.",
-                reply_markup={
-                    "inline_keyboard": [
-                        [{"text": "⬅️ Назад", "callback_data": "menu_help"}]
-                    ]
-                },
-            )
-
-        elif data == "help_rp":
-            async_edit_message_text(
-                chat_id,
-                message_id,
-                "⚔️ **Дуэли и Переводы**\n\n• Грабите игроков и переводите"
-                " валюту друзьям.",
-                reply_markup={
-                    "inline_keyboard": [
-                        [{"text": "⬅️ Назад", "callback_data": "menu_help"}]
-                    ]
-                },
-            )
-
-        elif data == "help_casino":
-            async_edit_message_text(
-                chat_id,
-                message_id,
-                "🎰 **Казино и Игры**\n\n• Играйте в Рулетку, Блэкджек (21) и"
-                " Кости.",
-                reply_markup={
-                    "inline_keyboard": [
-                        [{"text": "⬅️ Назад", "callback_data": "menu_help"}]
-                    ]
-                },
-            )
-
-        elif data == "menu_ad":
-            cursor.execute(
-                "SELECT last_ad FROM users WHERE user_id = ?", (user_id,)
-            )
-            last_ad = cursor.fetchone()[0]
-            curr_time = int(time.time())
-            if curr_time - last_ad >= 1800:  # Реклама каждые 30 мин
-                cursor.execute(
-                    "UPDATE users SET balance = balance + 300, last_ad = ?"
-                    " WHERE user_id = ?",
-                    (curr_time, user_id),
-                )
-                conn.commit()
-                async_answer_callback(
-                    call["id"], "📺 Начислено +300$ за просмотр рекламы!"
-                )
-            else:
-                rem = 1800 - (curr_time - last_ad)
-                async_answer_callback(
-                    call["id"], f"⏳ Доступно через: {int(rem // 60)} мин."
                 )
 
         elif data == "menu_top":
@@ -1055,7 +960,7 @@ def handle_update(update: dict):
 
 def main():
     api_request("deleteWebhook", {"drop_pending_updates": True})
-    print("🚀 Бот запущен!")
+    print("🚀 Бот запущен с облачной БД PostgreSQL (Neon)!")
     offset = 0
     while True:
         try:
@@ -1066,7 +971,7 @@ def main():
                     threading.Thread(
                         target=handle_update, args=(update,), daemon=True
                     ).start()
-        except Exception as e:
+        except Exception:
             pass
         time.sleep(0.1)
 
