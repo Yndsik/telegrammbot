@@ -100,6 +100,7 @@ def update_balance(user_id, amount):
     conn.commit()
 
 
+# Начисление 5% каждый час (3600 сек)
 def process_auto_interest(user_id):
     curr_time = int(time.time())
     cursor.execute(
@@ -113,14 +114,14 @@ def process_auto_interest(user_id):
 
     if bank_bal > 0:
         last_check = last_interest if last_interest > 0 else (dep_created if dep_created > 0 else curr_time)
-        elapsed_days = (curr_time - last_check) // 86400
+        elapsed_hours = (curr_time - last_check) // 3600
 
-        if elapsed_days >= 1:
+        if elapsed_hours >= 1:
             new_bal = bank_bal
-            for _ in range(int(elapsed_days)):
+            for _ in range(int(elapsed_hours)):
                 new_bal += int(new_bal * rate)
             
-            new_last_interest = last_check + (int(elapsed_days) * 86400)
+            new_last_interest = last_check + (int(elapsed_hours) * 3600)
             cursor.execute(
                 "UPDATE users SET bank_balance = ?, last_auto_interest = ? WHERE user_id = ?",
                 (new_bal, new_last_interest, user_id),
@@ -146,12 +147,11 @@ CARS = {
     "🏎 Спорткар": {"price": 50000},
 }
 
-pending_proposals = {}
 pending_duels = {}
 games_21 = {}
 
 
-# --- 2. МНОГОПОТОЧНАЯ СЕТЕВАЯ ОТПРАВКА СУПЕР-БЫСТРО ДЛЯ PYTO ---
+# --- 2. МНОГОПОТОЧНАЯ СЕТЕВАЯ ОТПРАВКА ---
 def api_request(method: str, params: dict = None):
     url = API_URL + method
     try:
@@ -197,7 +197,7 @@ main_keyboard = {
         [{"text": "🏦 Банк"}, {"text": "🏰 Имущество"}],
         [{"text": "👤 Профиль"}, {"text": "🏆 Топ богачей"}],
         [{"text": "🎁 Ежедневный бонус"}, {"text": "📺 Реклама (+300$)"}],
-        [{"text": "💍 Свадьба"}, {"text": "ℹ️ Помощь / Команды"}],
+        [{"text": "ℹ️ Помощь / Команды"}],
     ],
     "resize_keyboard": True,
 }
@@ -281,6 +281,7 @@ def handle_update(update: dict):
 
         get_user(user_id, first_name)
 
+        # --- ОБРАБОТКА ВВОДА СУММ ---
         if user_id in user_states and not text.startswith("/"):
             state = user_states[user_id]
             action = state["action"]
@@ -310,7 +311,7 @@ def handle_update(update: dict):
                     chat_id,
                     f"🏦 **Депозит успешно пополнен!**\n\n"
                     f"💵 Внесено: **{amount}$**\n"
-                    f"📈 Процентная ставка: **5% в сутки** (начисляется автоматически)\n"
+                    f"📈 Процентная ставка: **5% в час** (начисляется автоматически)\n"
                     f"🏦 Всего в банке: **{bank_balance + amount}$**",
                 )
                 return
@@ -421,6 +422,132 @@ def handle_update(update: dict):
                 )
                 return
 
+        # --- ОБРАБОТКА RP-КОМАНД В ЧАТЕ (ЧЕРЕЗ REPLY) ---
+        reply_to = msg.get("reply_to_message")
+
+        if reply_to:
+            target_id = reply_to["from"]["id"]
+            target_name = reply_to["from"].get("first_name", "Игрок")
+
+            # 1. Перевод денег (/pay 500 или дать 500)
+            if text_lower.startswith(("/pay", "дать", "передать")):
+                if target_id == user_id:
+                    async_send_message(chat_id, "❌ Нельзя переводить деньги самому себе!")
+                else:
+                    get_user(target_id, target_name)
+                    parts = text.split()
+                    if len(parts) >= 2:
+                        cursor.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
+                        my_bal = cursor.fetchone()[0]
+                        amount = parse_amount(parts[1], my_bal)
+
+                        if amount <= 0:
+                            async_send_message(chat_id, "❌ Укажите корректную сумму для перевода!")
+                        elif my_bal < amount:
+                            async_send_message(chat_id, "❌ У вас недостаточно денег!")
+                        else:
+                            update_balance(user_id, -amount)
+                            update_balance(target_id, amount)
+                            async_send_message(
+                                chat_id,
+                                f"💸 **{first_name}** перевел **{amount}$** игроку **{target_name}**!",
+                            )
+                    else:
+                        async_send_message(chat_id, "💡 Использование: ответьте на сообщение и напишите `/pay [сумма]`")
+
+            # 2. Ограбление (/rob или ограбить)
+            elif text_lower in ["ограбить", "/rob"]:
+                if target_id == user_id:
+                    async_send_message(chat_id, "❌ Нельзя ограбить самого себя!")
+                else:
+                    curr_time = int(time.time())
+                    cursor.execute("SELECT last_rob FROM users WHERE user_id = ?", (user_id,))
+                    last_rob = cursor.fetchone()[0]
+
+                    if curr_time - last_rob < 1800:
+                        rem = 1800 - (curr_time - last_rob)
+                        async_send_message(chat_id, f"⏳ Полиция ищет вас! Попробуйте через {int(rem // 60)} мин.")
+                    else:
+                        cursor.execute("SELECT balance FROM users WHERE user_id = ?", (target_id,))
+                        target_row = cursor.fetchone()
+                        target_bal = target_row[0] if target_row else 0
+
+                        if target_bal < 100:
+                            async_send_message(chat_id, f"❌ У {target_name} слишком мало денег в карманах!")
+                        else:
+                            cursor.execute("UPDATE users SET last_rob = ? WHERE user_id = ?", (curr_time, user_id))
+                            conn.commit()
+
+                            if random.random() < 0.5:
+                                stolen = random.randint(50, min(target_bal, 1000))
+                                update_balance(target_id, -stolen)
+                                update_balance(user_id, stolen)
+                                async_send_message(
+                                    chat_id,
+                                    f"🥷 **Успешное ограбление!** {first_name} выкрал **{stolen}$** у {target_name}!",
+                                )
+                            else:
+                                fine = 200
+                                update_balance(user_id, -fine)
+                                async_send_message(
+                                    chat_id,
+                                    f"🚨 **Ограбление провалилось!** {first_name} попался полиции и заплатил штраф **{fine}$**.",
+                                )
+
+            # 3. Свадьба (/marry или брак)
+            elif text_lower in ["брак", "/marry"]:
+                if target_id == user_id:
+                    async_send_message(chat_id, "❌ Нельзя жениться на самом себе!")
+                else:
+                    cursor.execute("SELECT spouse_id FROM users WHERE user_id = ?", (user_id,))
+                    my_spouse = cursor.fetchone()[0]
+
+                    if my_spouse != 0:
+                        async_send_message(chat_id, "❌ Вы уже состоите в браке!")
+                    else:
+                        cursor.execute("UPDATE users SET spouse_id = ? WHERE user_id = ?", (target_id, user_id))
+                        cursor.execute("UPDATE users SET spouse_id = ? WHERE user_id = ?", (user_id, target_id))
+                        conn.commit()
+
+                        async_send_message(
+                            chat_id,
+                            f"💍 **ПОЗДРАВЛЯЕМ!** {first_name} и {target_name} теперь состоят в браке! 🎉",
+                        )
+
+            # 4. Дуэль (дуэль 500)
+            elif text_lower.startswith("дуэль"):
+                if target_id == user_id:
+                    async_send_message(chat_id, "❌ Нельзя вызвать на дуэль самого себя!")
+                else:
+                    parts = text.split()
+                    if len(parts) >= 2:
+                        cursor.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
+                        my_bal = cursor.fetchone()[0]
+                        bet = parse_amount(parts[1], my_bal)
+
+                        cursor.execute("SELECT balance FROM users WHERE user_id = ?", (target_id,))
+                        target_row = cursor.fetchone()
+                        target_bal = target_row[0] if target_row else 0
+
+                        if bet <= 0:
+                            async_send_message(chat_id, "❌ Укажите корректную сумму ставки!")
+                        elif my_bal < bet or target_bal < bet:
+                            async_send_message(chat_id, "❌ У одного из участников недостаточно средств!")
+                        else:
+                            winner, loser = (user_id, target_id) if random.random() < 0.5 else (target_id, user_id)
+                            winner_name = first_name if winner == user_id else target_name
+
+                            update_balance(winner, bet)
+                            update_balance(loser, -bet)
+
+                            async_send_message(
+                                chat_id,
+                                f"⚔️ **ДУЭЛЬ!**\n\n"
+                                f"💥 {first_name} и {target_name} сошлись в поединке на **{bet}$**!\n"
+                                f"🏆 В жестоком бою победил **{winner_name}** и забирает банк **{bet * 2}$**!",
+                            )
+
+        # --- ТЕКСТОВЫЕ КОМАНДЫ И МЕНЮ ---
         if text.startswith("/start"):
             async_send_message(
                 chat_id,
@@ -452,13 +579,12 @@ def handle_update(update: dict):
 
             if bank_balance > 0:
                 last_check = last_interest if last_interest > 0 else dep_created
-                rem_seconds = 86400 - (curr_time - last_check)
+                rem_seconds = 3600 - (curr_time - last_check)
                 if rem_seconds <= 0:
                     time_status = "доступно прямо сейчас!"
                 else:
-                    hours = int(rem_seconds // 3600)
                     mins = int((rem_seconds % 3600) // 60)
-                    time_status = f"через {hours} ч. {mins} мин."
+                    time_status = f"через {mins} мин."
 
                 status_text = f"✅ **Активен** (Доход {int(dep_rate * 100)}% {time_status})"
             else:
@@ -478,7 +604,7 @@ def handle_update(update: dict):
                 f"🏦 **Центральный Банк**\n\n"
                 f"💼 Наличные в кармане: **{my_balance}$**\n"
                 f"🏦 На депозите в банке: **{bank_balance}$**\n"
-                f"📈 Начисление: **{int(dep_rate * 100)}% в сутки** (автоматически)\n"
+                f"📈 Начисление: **{int(dep_rate * 100)}% в час** (автоматически)\n"
                 f"📊 Статус счета: {status_text}\n\n"
                 f"Нажмите на кнопку ниже, чтобы внести или снять средства:",
                 reply_markup=bank_inline_kb,
@@ -702,7 +828,7 @@ def handle_update(update: dict):
                 message_id,
                 "🏦 **Банк и Депозиты:**\n\n"
                 "• Нажмите «🏦 Банк» -> «📥 Положить на депозит» и введите сумму.\n"
-                "• Проценты (5% в сутки) начисляются **автоматически каждые 24 часа**!",
+                "• Проценты (5% в час) начисляются **автоматически каждый час**!",
                 reply_markup=back_to_help_kb,
             )
 
@@ -732,7 +858,7 @@ def handle_update(update: dict):
                 chat_id,
                 message_id,
                 "⚔️ **RP Взаимодействия (в чатах через Reply):**\n\n"
-                "• Перевод: Ответьте на сообщение: `/pay [сумма]` (или `дать 500`).\n"
+                "• Перевод: Ответьте на сообщение: `/pay [сумма]` или `дать 500`.\n"
                 "• Ограбление: Ответьте на сообщение: `ограбить` или `/rob`.\n"
                 "• Дуэль: Ответьте на сообщение: `дуэль [ставка]`.\n"
                 "• Свадьба: Ответьте на сообщение: `Брак` или `/marry`.",
@@ -953,7 +1079,7 @@ def handle_update(update: dict):
 # --- 5. ЗАПУСК БОТА ---
 def main():
     api_request("deleteWebhook", {"drop_pending_updates": True})
-    print("🚀 RP бот полностью собран и запущен на Pyto!")
+    print("🚀 RP бот успешно запущен!")
     offset = 0
 
     while True:
