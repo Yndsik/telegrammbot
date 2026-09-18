@@ -45,7 +45,7 @@ user_cooldowns = {}
 COOLDOWN_TIME = 0.2
 user_states = {}
 
-# Ваша строка подключения к Neon PostgreSQL
+# Строка подключения к Neon PostgreSQL
 DB_URL = "postgresql://neondb_owner:npg_MZklTNW64pxJ@ep-curly-salad-b4qr5crk-pooler.c-6.us-east-2.aws.neon.tech/neondb?sslmode=require"
 
 
@@ -336,6 +336,23 @@ back_to_main_kb = {
     ]
 }
 
+casino_menu_keyboard = {
+    "inline_keyboard": [
+        [
+            {
+                "text": "🔴 Красное (ставка 500$)",
+                "callback_data": "cas_roul_red",
+            },
+            {
+                "text": "⚫ Черное (ставка 500$)",
+                "callback_data": "cas_roul_black",
+            },
+        ],
+        [{"text": "🎲 Бросить кости на 1000$", "callback_data": "cas_dice_1000"}],
+        [{"text": "⬅️ Назад", "callback_data": "menu_main"}],
+    ]
+}
+
 
 def is_admin(user_id: int, username: str) -> bool:
     if user_id in ADMIN_IDS:
@@ -394,8 +411,8 @@ def handle_update(update: dict):
 
             parts = text.split()
             if text_lower.startswith("/givemoney"):
-                if len(parts) >= 2 and parts[1].isdigit():
-                    amount = int(parts[1])
+                if len(parts) >= 2 and parts.isdigit():
+                    amount = int(parts)
                     reply_to = msg.get("reply_to_message")
                     target = reply_to["from"]["id"] if reply_to else user_id
                     target_name = (
@@ -414,9 +431,9 @@ def handle_update(update: dict):
 
             elif text_lower.startswith("/take"):
                 reply_to = msg.get("reply_to_message")
-                if reply_to and len(parts) >= 2 and parts[1].isdigit():
+                if reply_to and len(parts) >= 2 and parts.isdigit():
                     target = reply_to["from"]["id"]
-                    amount = int(parts[1])
+                    amount = int(parts)
                     update_balance(target, -amount)
                     async_send_message(
                         chat_id,
@@ -424,6 +441,226 @@ def handle_update(update: dict):
                         f" {reply_to['from'].get('first_name')}!",
                     )
                     return
+
+        # ПЕРЕВОД ДЕНЕГ ДРУГОМУ ИГРОКУ: /pay <сумма> в ответ на сообщение
+        if text_lower.startswith("/pay"):
+            reply_to = msg.get("reply_to_message")
+            parts = text.split()
+            if not reply_to or len(parts) < 2 or not parts.isdigit():
+                async_send_message(
+                    chat_id,
+                    "ℹ️ **Как переводить:** ответьте на сообщение игрока"
+                    " командой `/pay <сумма>` (например, `/pay 1000`).",
+                )
+                return
+
+            target = reply_to["from"]["id"]
+            if target == user_id:
+                async_send_message(
+                    chat_id, "❌ Нельзя перевести самому себе!"
+                )
+                return
+
+            amount = int(parts)
+            if amount <= 0:
+                async_send_message(
+                    chat_id, "❌ Сумма должна быть больше нуля!"
+                )
+                return
+
+            get_user(target, reply_to["from"].get("first_name", "Игрок"))
+            cursor.execute(
+                "SELECT balance FROM users WHERE user_id = %s", (user_id,)
+            )
+            my_bal = cursor.fetchone()[0]
+
+            if my_bal < amount:
+                async_send_message(
+                    chat_id, "❌ У вас недостаточно наличных для перевода!"
+                )
+                return
+
+            cursor.execute(
+                "UPDATE users SET balance = balance - %s WHERE user_id = %s",
+                (amount, user_id),
+            )
+            cursor.execute(
+                "UPDATE users SET balance = balance + %s WHERE user_id = %s",
+                (amount, target),
+            )
+            conn.commit()
+
+            target_name = reply_to["from"].get("first_name", "Игрок")
+            async_send_message(
+                chat_id,
+                f"✅ Вы успешно перевели **{amount}$** игроку **{target_name}**!",
+            )
+            return
+
+        # ДУЭЛЬ: /duel <ставка> в ответ на сообщение
+        if text_lower.startswith("/duel"):
+            reply_to = msg.get("reply_to_message")
+            parts = text.split()
+            if not reply_to or len(parts) < 2 or not parts.isdigit():
+                async_send_message(
+                    chat_id,
+                    "⚔️ **Как дуэлиться:** ответьте на сообщение игрока"
+                    " командой `/duel <ставка>` (например, `/duel 500`). Шанс"
+                    " победы 50/50.",
+                )
+                return
+
+            target = reply_to["from"]["id"]
+            if target == user_id:
+                async_send_message(
+                    chat_id, "❌ Нельзя вызвать на дуэль самого себя!"
+                )
+                return
+
+            stake = int(parts)
+            if stake < 100:
+                async_send_message(
+                    chat_id, "❌ Минимальная ставка для дуэли — 100$!"
+                )
+                return
+
+            get_user(target, reply_to["from"].get("first_name", "Игрок"))
+            cursor.execute(
+                "SELECT balance FROM users WHERE user_id = %s", (user_id,)
+            )
+            my_bal = cursor.fetchone()[0]
+            cursor.execute(
+                "SELECT balance FROM users WHERE user_id = %s", (target,)
+            )
+            target_bal = cursor.fetchone()[0]
+
+            if my_bal < stake or target_bal < stake:
+                async_send_message(
+                    chat_id,
+                    "❌ У одного из участников недостаточно средств для такой"
+                    " ставки!",
+                )
+                return
+
+            target_name = reply_to["from"].get("first_name", "Игрок")
+            if random.random() < 0.5:
+                cursor.execute(
+                    "UPDATE users SET balance = balance + %s WHERE user_id = %s",
+                    (stake, user_id),
+                )
+                cursor.execute(
+                    "UPDATE users SET balance = balance - %s WHERE user_id = %s",
+                    (stake, target),
+                )
+                conn.commit()
+                async_send_message(
+                    chat_id,
+                    f"⚔️ **Дуэль завершена!** Вы победили **{target_name}** и"
+                    f" забрали **+{stake}$**!",
+                )
+            else:
+                cursor.execute(
+                    "UPDATE users SET balance = balance - %s WHERE user_id = %s",
+                    (stake, user_id),
+                )
+                cursor.execute(
+                    "UPDATE users SET balance = balance + %s WHERE user_id = %s",
+                    (stake, target),
+                )
+                conn.commit()
+                async_send_message(
+                    chat_id,
+                    f"⚔️ **Дуэль завершена!** Соперник **{target_name}**"
+                    f" оказался сильнее, вы проиграли **-{stake}$**.",
+                )
+            return
+
+        # ОГРАБЛЕНИЕ: /rob в ответ на сообщение
+        if text_lower.startswith("/rob"):
+            reply_to = msg.get("reply_to_message")
+            if not reply_to:
+                async_send_message(
+                    chat_id,
+                    "🕶 **Как грабить:** ответьте на сообщение игрока"
+                    " командой `/rob` (кулдаун 15 мин, шанс 40%).",
+                )
+                return
+
+            target = reply_to["from"]["id"]
+            if target == user_id:
+                async_send_message(
+                    chat_id, "❌ Нельзя ограбить самого себя!"
+                )
+                return
+
+            curr_time = int(time.time())
+            cursor.execute(
+                "SELECT last_rob FROM users WHERE user_id = %s", (user_id,)
+            )
+            row = cursor.fetchone()
+            last_rob = row[0] if row else 0
+
+            if curr_time - last_rob < 900:
+                rem = 900 - (curr_time - last_rob)
+                async_send_message(
+                    chat_id,
+                    f"⏳ Кулдаун на ограбления: еще {int(rem // 60)} мин.",
+                )
+                return
+
+            get_user(target, reply_to["from"].get("first_name", "Игрок"))
+            cursor.execute(
+                "SELECT balance FROM users WHERE user_id = %s", (target,)
+            )
+            target_bal = cursor.fetchone()[0]
+
+            cursor.execute(
+                "UPDATE users SET last_rob = %s WHERE user_id = %s",
+                (curr_time, user_id),
+            )
+            conn.commit()
+
+            target_name = reply_to["from"].get("first_name", "Игрок")
+            if target_bal < 100:
+                async_send_message(
+                    chat_id,
+                    f"🕶 У **{target_name}** слишком мало наличных в кармане,"
+                    " грабить бессмысленно.",
+                )
+                return
+
+            if random.random() < 0.40:
+                loot = min(target_bal, random.randint(150, 1500))
+                cursor.execute(
+                    "UPDATE users SET balance = balance + %s WHERE user_id ="
+                    " %s",
+                    (loot, user_id),
+                )
+                cursor.execute(
+                    "UPDATE users SET balance = balance - %s WHERE user_id ="
+                    " %s",
+                    (loot, target),
+                )
+                conn.commit()
+                async_send_message(
+                    chat_id,
+                    f"🕶 **Успешный грабеж!** Вы украли **{loot}$** у"
+                    f" **{target_name}**!",
+                )
+            else:
+                fine = random.randint(100, 500)
+                cursor.execute(
+                    "UPDATE users SET balance = GREATEST(0, balance - %s) WHERE"
+                    " user_id = %s",
+                    (fine, user_id),
+                )
+                conn.commit()
+                async_send_message(
+                    chat_id,
+                    f"🚨 **Полиция пресекла попытку!** Вас поймали при"
+                    f" ограблении **{target_name}**, штраф **-{fine}$**.",
+                )
+            return
 
         # Ввод сумм для банка
         if user_id in user_states and not text.startswith("/"):
@@ -508,7 +745,7 @@ def handle_update(update: dict):
                 else "💍 Статус: Холост"
             )
             admin_badge = (
-                "👑 **Статус:** Владелец / Администратор\n"
+                "👑 **Статус:** Владелец / Администратор (@Stariy_bog1336)\n"
                 if is_admin(user_id, username)
                 else ""
             )
@@ -581,6 +818,98 @@ def handle_update(update: dict):
                 "📖 **Справочное бюро**\n\nВыберите нужную категорию из меню ниже:",
                 reply_markup=help_inline_menu,
             )
+
+        # КАЗИНО И ИГРЫ
+        elif data == "menu_casino":
+            async_edit_message_text(
+                chat_id,
+                message_id,
+                "🎰 **Казино и Азартные Игры**\n\nИспытай удачу! Выберите"
+                " режим:",
+                reply_markup=casino_menu_keyboard,
+            )
+
+        elif data in ["cas_roul_red", "cas_roul_black"]:
+            cursor.execute(
+                "SELECT balance FROM users WHERE user_id = %s", (user_id,)
+            )
+            row = cursor.fetchone()
+            my_bal = row[0] if row else 0
+            bet = 500
+
+            if my_bal < bet:
+                async_answer_callback(
+                    call["id"], f"❌ Нужно минимум {bet}$ на балансе!"
+                )
+                return
+
+            win = random.choice([True, False])
+            if win:
+                cursor.execute(
+                    "UPDATE users SET balance = balance + %s WHERE user_id ="
+                    " %s",
+                    (bet, user_id),
+                )
+                conn.commit()
+                async_answer_callback(
+                    call["id"], f"🎉 Победа! Вы выиграли +{bet}$!"
+                )
+            else:
+                cursor.execute(
+                    "UPDATE users SET balance = balance - %s WHERE user_id ="
+                    " %s",
+                    (bet, user_id),
+                )
+                conn.commit()
+                async_answer_callback(
+                    call["id"], f"😢 Вы проиграли -{bet}$."
+                )
+
+        elif data == "cas_dice_1000":
+            cursor.execute(
+                "SELECT balance FROM users WHERE user_id = %s", (user_id,)
+            )
+            row = cursor.fetchone()
+            my_bal = row[0] if row else 0
+            bet = 1000
+
+            if my_bal < bet:
+                async_answer_callback(
+                    call["id"], f"❌ Нужно минимум {bet}$ на балансе!"
+                )
+                return
+
+            my_dice = random.randint(1, 6)
+            bot_dice = random.randint(1, 6)
+
+            if my_dice > bot_dice:
+                cursor.execute(
+                    "UPDATE users SET balance = balance + %s WHERE user_id ="
+                    " %s",
+                    (bet, user_id),
+                )
+                conn.commit()
+                async_answer_callback(
+                    call["id"],
+                    f"🎲 У вас {my_dice}, у дилера {bot_dice}. Победа +{bet}$!",
+                )
+            elif my_dice < bot_dice:
+                cursor.execute(
+                    "UPDATE users SET balance = balance - %s WHERE user_id ="
+                    " %s",
+                    (bet, user_id),
+                )
+                conn.commit()
+                async_answer_callback(
+                    call["id"],
+                    f"🎲 У вас {my_dice}, у дилера {bot_dice}. Вы проиграли"
+                    f" -{bet}$!",
+                )
+            else:
+                async_answer_callback(
+                    call["id"],
+                    f"🎲 Ничья ({my_dice}:{bot_dice}), ставка возвращена.",
+                )
 
         # РАБОТА И РАЗВИТИЕ
         elif data == "menu_jobs":
@@ -804,7 +1133,7 @@ def handle_update(update: dict):
             )
             row = cursor.fetchone()
             bank_balance = row[0] if row else 0
-            my_balance = row[2] if row else 0
+            my_balance = row if row else 0
 
             bank_inline_kb = {
                 "inline_keyboard": [
@@ -922,8 +1251,8 @@ def handle_update(update: dict):
             )
             row = cursor.fetchone()
             business = row[0] if row else "Отсутствует"
-            last_collect = row[1] if row else 0
-            exp = row[2] if row else 0
+            last_collect = row if row else 0
+            exp = row if row else 0
 
             if business == "Отсутствует":
                 async_answer_callback(call["id"], "❌ У вас нет бизнеса!")
@@ -943,6 +1272,141 @@ def handle_update(update: dict):
                     f"⏳ До сбора кассы: {int((rem % 3600) // 60)} мин.",
                 )
 
+        # РАСШИРЕННЫЕ КАТЕГОРИИ ПОМОЩИ
+        elif data == "help_dev":
+            async_edit_message_text(
+                chat_id,
+                message_id,
+                (
+                    "🛠 **О разработке и ИИ**\n\n"
+                    "• Бот создан на Python + PostgreSQL (Neon).\n"
+                    "• Архитектура: потоковый асинхронный polling + HTTP-health"
+                    " check для Render.\n"
+                    "• Администратор и владелец: **@Stariy_bog1336**"
+                ),
+                reply_markup={
+                    "inline_keyboard": [
+                        [{"text": "⬅️ Назад", "callback_data": "menu_help"}]
+                    ]
+                },
+            )
+
+        elif data == "help_jobs":
+            async_edit_message_text(
+                chat_id,
+                message_id,
+                (
+                    "💼 **Работа и Заработок**\n\n"
+                    "• Устраивайтесь на работу через меню (`💼 Работа и"
+                    " Развитие`).\n"
+                    "• Опыт (EXP) растет за каждую смену (+10 EXP) и за"
+                    " ежедневный бонус (+5 EXP).\n"
+                    "• Больше опыта = выше зарплата и бонус к доходу с"
+                    " бизнеса."
+                ),
+                reply_markup={
+                    "inline_keyboard": [
+                        [{"text": "⬅️ Назад", "callback_data": "menu_help"}]
+                    ]
+                },
+            )
+
+        elif data == "help_bank":
+            async_edit_message_text(
+                chat_id,
+                message_id,
+                (
+                    "🏦 **Банк и Депозиты**\n\n"
+                    "• Пополняйте счет наличными.\n"
+                    "• На депозит автоматически начисляется **5% в час**"
+                    " при любом обращении к боту."
+                ),
+                reply_markup={
+                    "inline_keyboard": [
+                        [{"text": "⬅️ Назад", "callback_data": "menu_help"}]
+                    ]
+                },
+            )
+
+        elif data == "help_property":
+            async_edit_message_text(
+                chat_id,
+                message_id,
+                (
+                    "🏰 **Имущество и Бизнес**\n\n"
+                    "• Покупайте машины (6 уровней) и дома (6 уровней) для"
+                    " статуса в профиле.\n"
+                    "• Покупайте бизнесы (Автомойка, Пиццерия, Ферма, Отель,"
+                    " БЦ, IT-Корпорация) для пассивного дохода раз в 2 часа."
+                ),
+                reply_markup={
+                    "inline_keyboard": [
+                        [{"text": "⬅️ Назад", "callback_data": "menu_help"}]
+                    ]
+                },
+            )
+
+        elif data == "help_rp":
+            async_edit_message_text(
+                chat_id,
+                message_id,
+                (
+                    "⚔️ **Дуэли, Ограбления и Переводы**\n\n"
+                    "• **Перевод:** ответьте `/pay <сумма>` на сообщение"
+                    " игрока.\n"
+                    "• **Дуэль:** ответьте `/duel <ставка>` на сообщение"
+                    " игрока (шанс 50/50).\n"
+                    "• **Ограбление:** ответьте `/rob` на сообщение игрока"
+                    " (кулдаун 15 мин, шанс 40%).\n"
+                    "• **Админ-выдача:** `/givemoney <сумма>` / `/take"
+                    " <сумма>` в ответ на сообщение."
+                ),
+                reply_markup={
+                    "inline_keyboard": [
+                        [{"text": "⬅️ Назад", "callback_data": "menu_help"}]
+                    ]
+                },
+            )
+
+        elif data == "help_casino":
+            async_edit_message_text(
+                chat_id,
+                message_id,
+                (
+                    "🎰 **Казино и Игры**\n\n"
+                    "• Играйте в Красное/Черное или Кости против дилера через"
+                    " меню казино."
+                ),
+                reply_markup={
+                    "inline_keyboard": [
+                        [{"text": "⬅️ Назад", "callback_data": "menu_help"}]
+                    ]
+                },
+            )
+
+        elif data == "menu_ad":
+            cursor.execute(
+                "SELECT last_ad FROM users WHERE user_id = %s", (user_id,)
+            )
+            row = cursor.fetchone()
+            last_ad = row[0] if row else 0
+            curr_time = int(time.time())
+            if curr_time - last_ad >= 1800:
+                cursor.execute(
+                    "UPDATE users SET balance = balance + 300, last_ad = %s"
+                    " WHERE user_id = %s",
+                    (curr_time, user_id),
+                )
+                conn.commit()
+                async_answer_callback(
+                    call["id"], "📺 Начислено +300$ за просмотр рекламы!"
+                )
+            else:
+                rem = 1800 - (curr_time - last_ad)
+                async_answer_callback(
+                    call["id"], f"⏳ Доступно через: {int(rem // 60)} мин."
+                )
+
         elif data == "menu_top":
             cursor.execute(
                 "SELECT first_name, (balance + bank_balance) as total FROM"
@@ -952,7 +1416,8 @@ def handle_update(update: dict):
             medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
             top_text = "🏆 **ТОП-10 САМЫХ БОГАТЫХ ИГРОКОВ** 🏆\n\n"
             for i, (name, total) in enumerate(top_users):
-                top_text += f"{medals[i]} {name} — {total}$\n"
+                if i < len(medals):
+                    top_text += f"{medals[i]} {name} — {total}$\n"
             async_edit_message_text(
                 chat_id, message_id, top_text, reply_markup=back_to_main_kb
             )
@@ -960,7 +1425,7 @@ def handle_update(update: dict):
 
 def main():
     api_request("deleteWebhook", {"drop_pending_updates": True})
-    print("🚀 Бот запущен с облачной БД PostgreSQL (Neon)!")
+    print("🚀 Бот запущен с полным RP-функционалом и PostgreSQL (Neon)!")
     offset = 0
     while True:
         try:
