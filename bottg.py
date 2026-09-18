@@ -1658,36 +1658,37 @@ def handle_update(update: dict):
             row = cursor.fetchone()
             last_ad = row[0] if row else 0
             curr_time = int(time.time())
-            if curr_time - last_ad >= 1800:
-                cursor.execute(
-                    "UPDATE users SET balance = balance + 300, last_ad = %s"
-                    " WHERE user_id = %s",
-                    (curr_time, user_id),
-                )
-                conn.commit()
-                async_answer_callback(
-                    call["id"], "📺 Начислено +300$ за просмотр рекламы!"
-                )
-            else:
-                rem = 1800 - (curr_time - last_ad)
-                async_answer_callback(
-                    call["id"], f"⏳ Доступно через: {int(rem // 60)} мин."
-                )
-
-                elif data == "menu_top":
+                    if curr_time - last_ad >= 1800:
             cursor.execute(
-                "SELECT first_name, (balance + bank_balance) as total FROM"
-                " users ORDER BY total DESC LIMIT 10"
+                "UPDATE users SET balance = balance + 300, last_ad = %s WHERE"
+                " user_id = %s",
+                (curr_time, user_id),
             )
-            top_users = cursor.fetchall()
-            medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
-            top_text = "🏆 **ТОП-10 САМЫХ БОГАТЫХ ИГРОКОВ** 🏆\n\n"
-            for i, (name, total) in enumerate(top_users):
-                if i < len(medals):
-                    top_text += f"{medals[i]} {name} — {total}$\n"
-            async_edit_message_text(
-                chat_id, message_id, top_text, reply_markup=back_to_main_kb
+            conn.commit()
+            async_answer_callback(
+                call["id"], "📺 Начислено +300$ за просмотр рекламы!"
             )
+        else:
+            rem = 1800 - (curr_time - last_ad)
+            async_answer_callback(
+                call["id"], f"⏳ Доступно через: {int(rem // 60)} мин."
+            )
+
+    elif data == "menu_top":
+        cursor.execute(
+            "SELECT first_name, (balance + bank_balance) as total FROM users"
+            " ORDER BY total DESC LIMIT 10"
+        )
+        top_users = cursor.fetchall()
+        medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
+        top_text = "🏆 **ТОП-10 САМЫХ БОГАТЫХ ИГРОКОВ** 🏆\n\n"
+        for i, (name, total) in enumerate(top_users):
+            if i < len(medals):
+                top_text += f"{medals[i]} {name} — {total}$\n"
+        async_edit_message_text(
+            chat_id, message_id, top_text, reply_markup=back_to_main_kb
+        )
+
 
 
 def main():
