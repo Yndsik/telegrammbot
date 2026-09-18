@@ -18,7 +18,7 @@ ADMIN_USERNAMES = ["stariy_bog1336"]
 ADMIN_IDS = [123456789]
 
 TOKEN = os.environ.get("8932170200:AAHpxbAuLChcEkQqaIofxOBUfyN8eVyEvAM")
-DB_URL = os.environ.get("DATABASE_URL")
+DB_URL = os.environ.get("postgresql://neondb_owner:npg_MZklTNW64pxJ@ep-curly-salad-b4qr5crk-pooler.c-6.us-east-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require")
 
 if not TOKEN:
     raise RuntimeError("Не задана переменная окружения BOT_TOKEN")
