@@ -1674,7 +1674,7 @@ def handle_update(update: dict):
                     call["id"], f"⏳ Доступно через: {int(rem // 60)} мин."
                 )
 
-        elif data == "menu_top":
+                elif data == "menu_top":
             cursor.execute(
                 "SELECT first_name, (balance + bank_balance) as total FROM"
                 " users ORDER BY total DESC LIMIT 10"
@@ -1709,4 +1709,5 @@ def main():
 
 
 if __name__ == "__main__":
-main()
+    main()
+
