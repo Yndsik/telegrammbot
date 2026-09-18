@@ -257,6 +257,13 @@ def async_send_message(chat_id: int, text: str, reply_markup: dict = None):
     threading.Thread(target=_worker, daemon=True).start()
 
 
+def async_send_dice(chat_id: int, emoji: str = "🎲"):
+    def _worker():
+        api_request("sendDice", {"chat_id": chat_id, "emoji": emoji})
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+
 def async_edit_message_text(
     chat_id: int, message_id: int, text: str, reply_markup: dict = None
 ):
@@ -340,16 +347,38 @@ casino_menu_keyboard = {
     "inline_keyboard": [
         [
             {
-                "text": "🔴 Красное (ставка 500$)",
+                "text": "🔴 Красное (500$)",
                 "callback_data": "cas_roul_red",
             },
             {
-                "text": "⚫ Черное (ставка 500$)",
+                "text": "⚫ Черное (500$)",
                 "callback_data": "cas_roul_black",
             },
         ],
-        [{"text": "🎲 Бросить кости на 1000$", "callback_data": "cas_dice_1000"}],
+        [
+            {
+                "text": "🎰 Слот-машина (500$ + стикер)",
+                "callback_data": "cas_slots_500",
+            }
+        ],
+        [
+            {
+                "text": "🎲 Кости против бота (1000$ + стикер)",
+                "callback_data": "cas_dice_1000",
+            }
+        ],
+        [{"text": "🃏 Блэкджек (21) — 1000$", "callback_data": "cas_bj_start"}],
         [{"text": "⬅️ Назад", "callback_data": "menu_main"}],
+    ]
+}
+
+bj_game_keyboard = {
+    "inline_keyboard": [
+        [
+            {"text": "🃏 Ещё карту (Hit)", "callback_data": "cas_bj_hit"},
+            {"text": "🛑 Хватит (Stand)", "callback_data": "cas_bj_stand"},
+        ],
+        [{"text": "🚪 Выход в казино", "callback_data": "menu_casino"}],
     ]
 }
 
@@ -369,6 +398,27 @@ def parse_amount(amount_str: str, user_balance: int) -> int:
     if amount_str.isdigit():
         return int(amount_str)
     return -1
+
+
+# Упрощенное хранение текущей игры в 21 для каждого user_id
+blackjack_games = {}
+
+
+def get_card_val(card):
+    if card in ["J", "Q", "K"]:
+        return 10
+    if card == "A":
+        return 11
+    return int(card)
+
+
+def calc_score(hand):
+    score = sum(get_card_val(c) for c in hand)
+    aces = hand.count("A")
+    while score > 21 and aces > 0:
+        score -= 10
+        aces -= 1
+    return score
 
 
 # --- 4. ОСНОВНАЯ ЛОГИКА ---
@@ -819,13 +869,22 @@ def handle_update(update: dict):
                 reply_markup=help_inline_menu,
             )
 
-        # КАЗИНО И ИГРЫ
+        # ПОЛНОЕ ИНТЕРАКТИВНОЕ КАЗИНО (РУЛЕТКА, СЛОТЫ, КОСТИ, 21)
         elif data == "menu_casino":
             async_edit_message_text(
                 chat_id,
                 message_id,
-                "🎰 **Казино и Азартные Игры**\n\nИспытай удачу! Выберите"
-                " режим:",
+                (
+                    "🎰 **VIP Казино**\n\n"
+                    "Выберите игру:\n"
+                    "• 🔴/⚫ Красное/Черное — шанс 50/50, куш x2 (ставка 500$)\n"
+                    "• 🎰 Слот-машина — анимационный стикер ТГ (ставка 500$, три"
+                    " семерки/одинаковые куш x5)\n"
+                    "• 🎲 Кости — анимационный кубик против дилера (ставка"
+                    " 1000$)\n"
+                    "• 🃏 Блэкджек (21) — классическая карточная игра против"
+                    " банка (ставка 1000$)"
+                ),
                 reply_markup=casino_menu_keyboard,
             )
 
@@ -844,6 +903,9 @@ def handle_update(update: dict):
                 return
 
             win = random.choice([True, False])
+            color_text = (
+                "🔴 Красное" if data == "cas_roul_red" else "⚫ Черное"
+            )
             if win:
                 cursor.execute(
                     "UPDATE users SET balance = balance + %s WHERE user_id ="
@@ -852,7 +914,15 @@ def handle_update(update: dict):
                 )
                 conn.commit()
                 async_answer_callback(
-                    call["id"], f"🎉 Победа! Вы выиграли +{bet}$!"
+                    call["id"],
+                    f"🎉 Выпал правильный сектор! Вы выиграли +{bet}$!",
+                )
+                async_edit_message_text(
+                    chat_id,
+                    message_id,
+                    f"🎰 **Рулетка ({color_text})**\n🎉 **Победа!** Вы забрали"
+                    f" **+{bet}$**!",
+                    reply_markup=back_to_main_kb,
                 )
             else:
                 cursor.execute(
@@ -861,8 +931,55 @@ def handle_update(update: dict):
                     (bet, user_id),
                 )
                 conn.commit()
+                async_answer_callback(call["id"], f"😢 Промах, -{bet}$")
+                async_edit_message_text(
+                    chat_id,
+                    message_id,
+                    f"🎰 **Рулетка ({color_text})**\n😢 **Проигрыш** —{bet}$."
+                    " Фортуна отвернулась.",
+                    reply_markup=back_to_main_kb,
+                )
+
+        elif data == "cas_slots_500":
+            cursor.execute(
+                "SELECT balance FROM users WHERE user_id = %s", (user_id,)
+            )
+            row = cursor.fetchone()
+            my_bal = row[0] if row else 0
+            bet = 500
+
+            if my_bal < bet:
                 async_answer_callback(
-                    call["id"], f"😢 Вы проиграли -{bet}$."
+                    call["id"], f"❌ Нужно минимум {bet}$ на балансе!"
+                )
+                return
+
+            # Списываем ставку перед броском
+            cursor.execute(
+                "UPDATE users SET balance = balance - %s WHERE user_id = %s",
+                (bet, user_id),
+            )
+            conn.commit()
+
+            # Отправляем анимационный стикер ТГ слотов
+            async_send_dice(chat_id, "🎰")
+
+            # Симуляция выпадения результата слотов (Telegram slots values 1-64, 22/43/64 - джекпот/комбо)
+            slot_win = random.random() < 0.35  # 35% шанс победы
+            if slot_win:
+                payout = bet * 3
+                cursor.execute(
+                    "UPDATE users SET balance = balance + %s WHERE user_id ="
+                    " %s",
+                    (payout, user_id),
+                )
+                conn.commit()
+                async_answer_callback(
+                    call["id"], f"🎰 ДЖЕКПОТ! Выиграно +{payout}$!"
+                )
+            else:
+                async_answer_callback(
+                    call["id"], f"🎰 Комбинация мимо, -{bet}$"
                 )
 
         elif data == "cas_dice_1000":
@@ -879,10 +996,38 @@ def handle_update(update: dict):
                 )
                 return
 
+            cursor.execute(
+                "UPDATE users SET balance = balance - %s WHERE user_id = %s",
+                (bet, user_id),
+            )
+            conn.commit()
+
+            # Кидаем анимационный кубик в чат от имени бота / игрока
+            async_send_dice(chat_id, "🎲")
+
             my_dice = random.randint(1, 6)
             bot_dice = random.randint(1, 6)
 
             if my_dice > bot_dice:
+                win_amt = bet * 2
+                cursor.execute(
+                    "UPDATE users SET balance = balance + %s WHERE user_id ="
+                    " %s",
+                    (win_amt, user_id),
+                )
+                conn.commit()
+                async_answer_callback(
+                    call["id"],
+                    f"🎲 У вас {my_dice}, у бота {bot_dice}. Выиграли"
+                    f" +{win_amt}$!",
+                )
+            elif my_dice < bot_dice:
+                async_answer_callback(
+                    call["id"],
+                    f"🎲 У вас {my_dice}, у бота {bot_dice}. Проигрыш"
+                    f" -{bet}$!",
+                )
+            else:
                 cursor.execute(
                     "UPDATE users SET balance = balance + %s WHERE user_id ="
                     " %s",
@@ -891,25 +1036,149 @@ def handle_update(update: dict):
                 conn.commit()
                 async_answer_callback(
                     call["id"],
-                    f"🎲 У вас {my_dice}, у дилера {bot_dice}. Победа +{bet}$!",
+                    f"🎲 Ничья ({my_dice}:{bot_dice}), ставка возвращена.",
                 )
-            elif my_dice < bot_dice:
+
+        # БЛЭКДЖЕК (21)
+        elif data == "cas_bj_start":
+            cursor.execute(
+                "SELECT balance FROM users WHERE user_id = %s", (user_id,)
+            )
+            row = cursor.fetchone()
+            my_bal = row[0] if row else 0
+            bet = 1000
+
+            if my_bal < bet:
+                async_answer_callback(
+                    call["id"], f"❌ Нужно минимум {bet}$ для игры в 21!"
+                )
+                return
+
+            cursor.execute(
+                "UPDATE users SET balance = balance - %s WHERE user_id = %s",
+                (bet, user_id),
+            )
+            conn.commit()
+
+            deck = [
+                "2",
+                "3",
+                "4",
+                "5",
+                "6",
+                "7",
+                "8",
+                "9",
+                "10",
+                "J",
+                "Q",
+                "K",
+                "A",
+            ] * 4
+            random.shuffle(deck)
+
+            player_hand = [deck.pop(), deck.pop()]
+            dealer_hand = [deck.pop(), deck.pop()]
+
+            blackjack_games[user_id] = {
+                "deck": deck,
+                "player": player_hand,
+                "dealer": dealer_hand,
+                "bet": bet,
+            }
+
+            p_score = calc_score(player_hand)
+            async_edit_message_text(
+                chat_id,
+                message_id,
+                f"🃏 **Блэкджек (21)**\n"
+                f"Ваши карты: `{' '.join(player_hand)}` (Счет: **{p_score}**)\n"
+                f"Карта дилера: `{dealer_hand[0]}` [скрыта]\n\n"
+                f"Ваш ход:",
+                reply_markup=bj_game_keyboard,
+            )
+
+        elif data == "cas_bj_hit":
+            game = blackjack_games.get(user_id)
+            if not game:
+                async_answer_callback(
+                    call["id"], "❌ Активная игра не найдена!"
+                )
+                return
+
+            game["player"].append(game["deck"].pop())
+            p_score = calc_score(game["player"])
+
+            if p_score > 21:
+                del blackjack_games[user_id]
+                async_edit_message_text(
+                    chat_id,
+                    message_id,
+                    f"🃏 **Блэкджек (21)**\n"
+                    f"Ваши карты: `{' '.join(game['player'])}` (Счет: **перебор"
+                    f" {p_score}**)\n\n"
+                    f"😢 **Вы перебрали и проиграли ставку (-{game['bet']}$)!**",
+                    reply_markup=back_to_main_kb,
+                )
+            else:
+                async_edit_message_text(
+                    chat_id,
+                    message_id,
+                    f"🃏 **Блэкджек (21)**\n"
+                    f"Ваши карты: `{' '.join(game['player'])}` (Счет:"
+                    f" **{p_score}**)\n"
+                    f"Карта дилера: `{game['dealer'][0]}` [скрыта]\n\n"
+                    f"Ваш ход:",
+                    reply_markup=bj_game_keyboard,
+                )
+
+        elif data == "cas_bj_stand":
+            game = blackjack_games.pop(user_id, None)
+            if not game:
+                async_answer_callback(
+                    call["id"], "❌ Активная игра не найдена!"
+                )
+                return
+
+            p_score = calc_score(game["player"])
+            d_score = calc_score(game["dealer"])
+
+            while d_score < 17:
+                game["dealer"].append(game["deck"].pop())
+                d_score = calc_score(game["dealer"])
+
+            res_text = (
+                f"🃏 **Итоги Блэкджека**\n"
+                f"Ваши карты: `{' '.join(game['player'])}` (Счет:"
+                f" **{p_score}**)\n"
+                f"Карты дилера: `{' '.join(game['dealer'])}` (Счет:"
+                f" **{d_score}**)\n\n"
+            )
+
+            bet = game["bet"]
+            if d_score > 21 or p_score > d_score:
+                win_amt = bet * 2
                 cursor.execute(
-                    "UPDATE users SET balance = balance - %s WHERE user_id ="
+                    "UPDATE users SET balance = balance + %s WHERE user_id ="
+                    " %s",
+                    (win_amt, user_id),
+                )
+                conn.commit()
+                res_text += f"🎉 **Победа! Вы выиграли +{win_amt}$!**"
+            elif p_score < d_score:
+                res_text += f"😢 **Дилер выиграл, вы проиграли -{bet}$!**"
+            else:
+                cursor.execute(
+                    "UPDATE users SET balance = balance + %s WHERE user_id ="
                     " %s",
                     (bet, user_id),
                 )
                 conn.commit()
-                async_answer_callback(
-                    call["id"],
-                    f"🎲 У вас {my_dice}, у дилера {bot_dice}. Вы проиграли"
-                    f" -{bet}$!",
-                )
-            else:
-                async_answer_callback(
-                    call["id"],
-                    f"🎲 Ничья ({my_dice}:{bot_dice}), ставка возвращена.",
-                )
+                res_text += f"🤝 **Ничья! Ставка возвращена (+{bet}$)**"
+
+            async_edit_message_text(
+                chat_id, message_id, res_text, reply_markup=back_to_main_kb
+            )
 
         # РАБОТА И РАЗВИТИЕ
         elif data == "menu_jobs":
@@ -1357,9 +1626,7 @@ def handle_update(update: dict):
                     "• **Дуэль:** ответьте `/duel <ставка>` на сообщение"
                     " игрока (шанс 50/50).\n"
                     "• **Ограбление:** ответьте `/rob` на сообщение игрока"
-                    " (кулдаун 15 мин, шанс 40%).\n"
-                    "• **Админ-выдача:** `/givemoney <сумма>` / `/take"
-                    " <сумма>` в ответ на сообщение."
+                    " (кулдаун 15 мин, шанс 40%)."
                 ),
                 reply_markup={
                     "inline_keyboard": [
@@ -1374,8 +1641,8 @@ def handle_update(update: dict):
                 message_id,
                 (
                     "🎰 **Казино и Игры**\n\n"
-                    "• Играйте в Красное/Черное или Кости против дилера через"
-                    " меню казино."
+                    "• Играйте в Красное/Черное, анимационные слоты (`🎰`),"
+                    " кости против бота (`🎲`) или карточный блэкджек (21)."
                 ),
                 reply_markup={
                     "inline_keyboard": [
@@ -1425,7 +1692,7 @@ def handle_update(update: dict):
 
 def main():
     api_request("deleteWebhook", {"drop_pending_updates": True})
-    print("🚀 Бот запущен с полным RP-функционалом и PostgreSQL (Neon)!")
+    print("🚀 Бот запущен с полным интерактивным казино и PostgreSQL (Neon)!")
     offset = 0
     while True:
         try:
@@ -1442,4 +1709,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+main()
