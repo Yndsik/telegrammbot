@@ -1,0 +1,13 @@
+MANIFEST.in
+README.md
+setup.cfg
+setup.py
+bot_tg/__init__.py
+bot_tg/__main__.py
+bot_tg/main_view.py
+bot_tg/main_view.pytoui
+bot_tg.egg-info/PKG-INFO
+bot_tg.egg-info/SOURCES.txt
+bot_tg.egg-info/dependency_links.txt
+bot_tg.egg-info/entry_points.txt
+bot_tg.egg-info/top_level.txt

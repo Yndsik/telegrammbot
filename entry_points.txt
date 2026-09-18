@@ -1,0 +1,3 @@
+[console_scripts]
+bot-tg = bot_tg:main
+
